@@ -1,6 +1,7 @@
 import tiktoken
 
 class TextSummarizer:
+    #For future me: the prompt_template needs more testing and tuning, which will tested in the main
     def __init__(self, llm, prompt_template="Summarize the following text:\n{text}", model="gpt-3.5-turbo", max_tokens=2000):
         self.llm = llm
         self.prompt_template = prompt_template
