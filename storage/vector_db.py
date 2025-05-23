@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict
 
-# I created this file in case I (or hopefully someone else, since it's open source) need to implement different vector databases in the future.
+# I created this file in case I (or hopefully someone else, since it's open-source) need to implement different vector databases in the future.
 
 class VectorDatabase(ABC):
     """
@@ -36,3 +36,18 @@ class VectorDatabase(ABC):
         Load the vector index and metadata from disk.
         """
         pass
+
+    @abstractmethod
+    def create(self, path: str) -> None:
+        """
+        Initialize a new vector database at the specified path
+        """
+        pass
+
+    @abstractmethod
+    def connect(self, config: dict) -> None:
+        """
+        Connect to an existing vector database from config
+        """
+        pass
+
