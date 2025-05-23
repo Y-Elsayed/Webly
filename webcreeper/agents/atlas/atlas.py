@@ -1,4 +1,4 @@
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 from creeper_core.base_agent import BaseAgent
 from creeper_core.storage import save_jsonl_line, save_json
@@ -11,10 +11,12 @@ class Atlas(BaseAgent):
         "user_agent": "AtlasCrawler",
         "max_depth": 3,
         "allowed_domains": [],
-        "storage_path": "./data",             # Where to store output data
-        "crawl_entire_website": False,        # Whether to crawl full site or by depth
-        "save_results": True,                 # Whether to save on_page_crawled results
-        "results_filename": "results.jsonl"   # One JSON per line, good for streaming
+        "allowed_paths": [],                # Only crawl if path starts with one of these
+        "blocked_paths": [],               # Skip if path starts with one of these
+        "storage_path": "./data",          # Where to store output data
+        "crawl_entire_website": False,     # Whether to crawl full site or by depth
+        "save_results": True,              # Whether to save on_page_crawled results
+        "results_filename": "results.jsonl"  # One JSON per line, good for streaming
     }
 
     def __init__(self, settings: dict = {}):
@@ -62,7 +64,7 @@ class Atlas(BaseAgent):
             return
 
         self.logger.info(f"Crawling page: {url} (Depth: {depth})")
-        if not self.is_allowed_link(url):
+        if not self.is_allowed_link(url) or not self.is_allowed_path(url):
             return
 
         content = self.fetch(url)
@@ -87,7 +89,7 @@ class Atlas(BaseAgent):
 
         while to_visit:
             url = to_visit.pop(0)
-            if url in self.visited or not self.is_allowed_link(url):
+            if url in self.visited or not self.is_allowed_link(url) or not self.is_allowed_path(url):
                 continue
 
             self.logger.info(f"Crawling page: {url}")
@@ -117,10 +119,24 @@ class Atlas(BaseAgent):
 
         for anchor in soup.find_all('a', href=True):
             full_url = urljoin(base_url, anchor['href'])
-            if self.is_allowed_link(full_url):
+            if self.is_allowed_link(full_url) and self.is_allowed_path(full_url):
                 links.add(full_url)
 
         return list(links)
+
+    def is_allowed_path(self, url: str) -> bool:
+        """
+        Check if the URL's path passes allowed_paths and blocked_paths filters.
+        """
+        path = urlparse(url).path
+        allowed_paths = self.settings.get("allowed_paths", [])
+        blocked_paths = self.settings.get("blocked_paths", [])
+
+        if allowed_paths and not any(path.startswith(p) for p in allowed_paths):
+            return False
+        if any(path.startswith(p) for p in blocked_paths):
+            return False
+        return True
 
     def _save_result(self, result: dict):
         if self.settings["save_results"] and result:
@@ -130,7 +146,6 @@ class Atlas(BaseAgent):
         if file_path is None:
             file_path = os.path.join(self.settings['storage_path'], 'graph.json')
         save_json(file_path, data)
-
 
     def get_graph(self):
         """
