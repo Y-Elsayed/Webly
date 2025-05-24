@@ -1,4 +1,4 @@
-from webly.chatbot.base import Chatbot
+from chatbot.base import Chatbot
 import string
 import tiktoken
 
