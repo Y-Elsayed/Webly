@@ -1,7 +1,15 @@
+from webly.chatbot.base import Chatbot
 import string
 import tiktoken
+
 class TextSummarizer:
-    def __init__(self, llm, prompt_template="Summarize the following text:\n{text}", model="gpt-3.5-turbo", max_tokens=2000):
+    def __init__(
+        self,
+        llm: Chatbot,
+        prompt_template="Summarize the following text:\n{text}",
+        model="gpt-3.5-turbo",
+        max_tokens=2000
+    ):
         self.llm = llm
         self.prompt_template = prompt_template
         self.max_tokens = max_tokens
@@ -18,19 +26,12 @@ class TextSummarizer:
     def summarize(self, url: str, text: str) -> dict:
         safe_text = self._truncate_text(text)
 
-        # Check if the prompt needs the text or not
         if self._has_text_placeholder():
             prompt = self.prompt_template.format(text=safe_text)
         else:
             prompt = self.prompt_template
 
-        # Flexible handling of LLM interface (messages or prompt)
-        if hasattr(self.llm, 'generate'):
-            summary = self.llm.generate(prompt)
-        elif hasattr(self.llm, 'chat'):
-            summary = self.llm.chat([{"role": "user", "content": prompt}])
-        else:
-            raise RuntimeError("LLM must implement either `generate(prompt)` or `chat(messages)`")
+        summary = self.llm.generate(prompt)
 
         return {
             "url": url,
