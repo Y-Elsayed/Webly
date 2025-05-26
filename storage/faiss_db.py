@@ -1,4 +1,4 @@
-from vector_db import VectorDatabase
+from .vector_db import VectorDatabase
 from typing import List, Dict
 import faiss
 import numpy as np
