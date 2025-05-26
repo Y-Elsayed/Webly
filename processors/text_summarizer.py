@@ -1,4 +1,4 @@
-from chatbot.base import Chatbot
+from chatbot.base_chatbot import Chatbot
 import string
 import tiktoken
 

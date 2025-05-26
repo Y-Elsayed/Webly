@@ -1,5 +1,5 @@
 import string
-from chatbot.base import Chatbot
+from chatbot.base_chatbot import Chatbot
 
 class WeblyChatAgent:
     def __init__(self, embedder, vector_db, chatbot: Chatbot, top_k=5, prompt_template=None):
