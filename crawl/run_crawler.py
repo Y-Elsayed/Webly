@@ -1,43 +1,31 @@
 from webcreeper.agents.atlas.atlas import Atlas
+from processors.html_processor import MarkdownTextExtractor
 
+class Crawler:
+    def __init__(self, start_url: str, allowed_domains: list, output_dir: str, results_filename: str = "results.jsonl", default_callback=None, default_settings=None):
+        self.start_url = start_url
+        self.allowed_domains = allowed_domains
+        self.output_dir = output_dir
+        self.results_filename = results_filename
+        self.default_callback = default_callback or MarkdownTextExtractor()
 
-def save_html_callback(url, html):
-    return {"url": url, "html": html}
+        self.default_settings = {
+            "base_url": start_url,
+            "allowed_domains": allowed_domains,
+            "storage_path": output_dir,
+            "results_filename": results_filename,
+            "crawl_entire_website": True
+        }
 
+        if default_settings:
+            self.default_settings.update(default_settings)
 
-def run_crawler(
-    start_url: str,
-    settings: dict = None,
-    on_page_crawled=None
-):
-    """
-    Crawl a website using Atlas.
+    def crawl(self, on_page_crawled=None, settings_override=None):
+        settings = self.default_settings.copy()
+        if settings_override:
+            settings.update(settings_override)
 
-    Args:
-        start_url (str): The URL to start from.
-        settings (dict): Dictionary of crawler settings (overrides Atlas.DEFAULT_SETTINGS).
-        on_page_crawled (callable, optional): Callback function to process each page.
-    """
-    default_settings = {
-        "base_url": start_url,
-        "allowed_domains": [],
-        "storage_path": "./out",
-        "results_filename": "results.jsonl",
-        "crawl_entire_website": True,
-        "timeout": 10,
-        "user_agent": "AtlasCrawler",
-        "max_depth": 3,
-        "allowed_paths": [],
-        "blocked_paths": [],
-        "save_results": True,
-    }
-
-    final_settings = {**default_settings, **(settings or {})}
-    final_settings["base_url"] = start_url  # always override with current
-
-    callback = on_page_crawled if on_page_crawled is not None else save_html_callback
-
-    atlas = Atlas(settings=final_settings)
-    atlas.crawl(start_url, on_page_crawled=callback)
-    atlas.process_data(atlas.get_graph())
-
+        atlas = Atlas(settings=settings)
+        callback = on_page_crawled or self.default_callback
+        atlas.crawl(self.start_url, on_page_crawled=callback)
+        atlas.process_data(atlas.get_graph())
