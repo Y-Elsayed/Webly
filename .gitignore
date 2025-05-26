@@ -176,3 +176,5 @@ cython_debug/
 # personal files
 TODO.md
 .env
+log/
+out/
