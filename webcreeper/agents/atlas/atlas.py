@@ -97,7 +97,10 @@ class Atlas(BaseAgent):
                 continue
 
             self.logger.info(f"Crawling page: {url}")
-            content = self.fetch(url)
+            content, content_type = self.fetch(url)
+            if "text/html" not in content_type:
+                self.logger.info(f"Skipping non-HTML content: {url} [{content_type}]")
+                continue
             self.visited.add(url)
             links = []
 
