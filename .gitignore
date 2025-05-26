@@ -175,3 +175,4 @@ cython_debug/
 
 # personal files
 TODO.md
+config.json
