@@ -7,32 +7,37 @@ def save_html_callback(url, html):
 
 def run_crawler(
     start_url: str,
-    allowed_domains: list,
-    output_dir: str = "./out",
-    on_page_crawled=None,
-    results_filename="results.jsonl"
+    settings: dict = None,
+    on_page_crawled=None
 ):
     """
-    Runs Atlas to crawl a website and process each page.
+    Crawl a website using Atlas.
 
     Args:
-        start_url (str): The starting URL for the crawl.
-        allowed_domains (list): Domains that are allowed to be crawled.
-        output_dir (str): Where to save the results.
-        on_page_crawled (callable): Function to call for each page. Should return a dict.
-        results_filename (str): Output file name for processed results.
+        start_url (str): The URL to start from.
+        settings (dict): Dictionary of crawler settings (overrides Atlas.DEFAULT_SETTINGS).
+        on_page_crawled (callable, optional): Callback function to process each page.
     """
-    settings = { # check the settings structure in the Atlas class
+    default_settings = {
         "base_url": start_url,
-        "allowed_domains": allowed_domains,
+        "allowed_domains": [],
+        "storage_path": "./out",
+        "results_filename": "results.jsonl",
         "crawl_entire_website": True,
-        "storage_path": output_dir,
-        "results_filename": results_filename,
-        "save_results": True
+        "timeout": 10,
+        "user_agent": "AtlasCrawler",
+        "max_depth": 3,
+        "allowed_paths": [],
+        "blocked_paths": [],
+        "save_results": True,
     }
-    
-    callback = on_page_crawled if on_page_crawled is not None else save_html_callback # uses the default callback, which saves the whole HTML
 
-    atlas = Atlas(settings=settings)
+    final_settings = {**default_settings, **(settings or {})}
+    final_settings["base_url"] = start_url  # always override with current
+
+    callback = on_page_crawled if on_page_crawled is not None else save_html_callback
+
+    atlas = Atlas(settings=final_settings)
     atlas.crawl(start_url, on_page_crawled=callback)
-    atlas.process_data(atlas.get_graph())  # Saving the website structure (pages and links)
+    atlas.process_data(atlas.get_graph())
+
