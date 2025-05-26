@@ -43,7 +43,8 @@ class BaseAgent(ABC):
             if response.status_code != 200:
                 self.logger.warning(f"Failed to fetch {url}: Status code {response.status_code}")
                 return None
-            return response.text  # Returning the HTML content of the page
+            content_type = response.headers.get('Content-Type', '')
+            return response.text, content_type # Returning the HTML content of the page and the content type in case is is needed
         except requests.exceptions.RequestException as e:
             self.logger.error(f"Error fetching {url}: {e}")
             self.blacklist.add(url)  # Add to blacklist on error
