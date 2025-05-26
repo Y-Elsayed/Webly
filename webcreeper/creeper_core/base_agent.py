@@ -118,8 +118,7 @@ class BaseAgent(ABC):
         # Check if we already have the robots.txt content cached for this domain
         if domain_key not in self.robots_cache:
             robots_txt = self.fetch_robots_txt(url)
-            if robots_txt:
-                self.robots_cache[domain_key] = robots_txt
+            self.robots_cache[domain_key] = robots_txt
 
         # If we have robots.txt cached for this domain
         if domain_key in self.robots_cache:
