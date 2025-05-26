@@ -3,6 +3,7 @@ import json
 from embedder.base_embedder import Embedder
 from storage.vector_db import VectorDatabase
 
+# will use this in the future for updating existing indices after re-crawling or any other changes
 
 class EmbedAndStorePipeline:
     def __init__(
