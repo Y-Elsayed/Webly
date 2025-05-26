@@ -1,5 +1,5 @@
 from bs4 import BeautifulSoup
-from docling import HtmlToMarkdown
+import html2text
 from abc import ABC, abstractmethod
 
 class TextExtractor(ABC):
@@ -30,11 +30,11 @@ class PlainTextExtractor(TextExtractor):
 
 
 class MarkdownTextExtractor(TextExtractor):
-    """
-    Converts HTML to Markdown using Docling.
-    """
     def __call__(self, url: str, html: str) -> dict:
-        markdown = HtmlToMarkdown().convert(html)
+        converter = html2text.HTML2Text()
+        converter.ignore_links = False
+        converter.ignore_images = False
+        markdown = converter.handle(html)
 
         return {
             "url": url,
