@@ -112,21 +112,21 @@ class BaseAgent(ABC):
         """
         Checks if the URL is allowed by the robots.txt file for the domain.
         """
-        domain = self.get_home_url(url)  # Get the base URL (domain)
-        domain_key = urlparse(domain).netloc  # Extract domain from URL
+        domain = self.get_home_url(url)
+        domain_key = urlparse(domain).netloc
 
-        # Check if we already have the robots.txt content cached for this domain
+        # Always cache result (even if it's None)
         if domain_key not in self.robots_cache:
             robots_txt = self.fetch_robots_txt(url)
-            self.robots_cache[domain_key] = robots_txt
+            self.robots_cache[domain_key] = robots_txt  # Cache even if None
 
-        # If we have robots.txt cached for this domain
-        if domain_key in self.robots_cache:
-            robots_txt = self.robots_cache[domain_key]
+        robots_txt = self.robots_cache[domain_key]
+        if robots_txt:
             return self._is_url_allowed_by_robots_txt(url, robots_txt)
 
-        # If no robots.txt found, allow crawling by default
-        return True
+        return True  # Default to allow if robots.txt is missing
+
+
 
     def _is_url_allowed_by_robots_txt(self, url: str, robots_txt: str) -> bool:
         """
