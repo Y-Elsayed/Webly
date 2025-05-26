@@ -67,7 +67,11 @@ class Atlas(BaseAgent):
         if not self.is_allowed_link(url) or not self.is_allowed_path(url):
             return
 
-        content = self.fetch(url)
+        content, content_type = self.fetch(url)
+        if "text/html" not in content_type:
+            self.logger.info(f"Skipping non-HTML content: {url} [{content_type}]")
+            return
+
         self.visited.add(url)
         links = []
 
