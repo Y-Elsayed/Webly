@@ -23,17 +23,18 @@ class WeblyChatAgent:
         if missing:
             raise ValueError(f"Prompt template is missing required placeholders: {', '.join(missing)}")
 
-    def answer(self, question: str) -> str:
-        # embed the question
-        query_embedding = self.embedder.embed(question)
+    def answer(self, question: str, context: str) -> str:
+        context = context.strip()
 
-        # retrieve the relevant docs
-        results = self.vector_db.search(query_embedding, top_k=self.top_k)
-        context = "\n\n".join([r.get("text") or r.get("markdown") or "" for r in results])
+        if not context:
+            return "I'm sorry, I couldn't find any relevant information to answer that question."
 
         # build the prompt
         prompt = self.prompt_template.format(context=context, question=question)
+        print(f"Prompt: {prompt}")
 
-        # generate teh answer
+        # generate the answer
         return self.chatbot.generate(prompt)
+
+
 
