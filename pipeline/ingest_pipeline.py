@@ -61,15 +61,27 @@ class IngestPipeline:
                 if not text:
                     continue
 
-                summary_data = self.summarizer(record["url"], text)
-                summary_text = summary_data["summary"]
-                embedding = self.embedder.embed(summary_text)
+                try:
+                    summary_data = self.summarizer(record["url"], text)
+                    if not summary_data or "summary" not in summary_data:
+                        print(f"[IngestPipeline] Skipping {record['url']} - summarizer returned nothing.")
+                        continue
 
-                record["summary"] = summary_text
-                record["embedding"] = embedding
-                transformed_records.append(record)
+                    summary_text = summary_data["summary"]
+                    embedding = self.embedder.embed(summary_text)
+                    if embedding is None:
+                        print(f"[IngestPipeline] Skipping {record['url']} - embedding failed.")
+                        continue
+
+                    record["summary"] = summary_text
+                    record["embedding"] = embedding
+                    transformed_records.append(record)
+
+                except Exception as e:
+                    print(f"[IngestPipeline] Skipping {record['url']} due to error: {e}")
 
         return transformed_records
+
 
     def load(self, records: List[dict]):
         """
