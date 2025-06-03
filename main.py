@@ -72,10 +72,17 @@ ingest_pipeline = IngestPipeline(
     summarizer=summarizer
 )
 
-if not os.path.exists(os.path.join(INDEX_DIR, "embeddings.index")):
-    ingest_pipeline.run()
-else:
-    db.load(INDEX_DIR)
+try:
+    if not os.path.exists(os.path.join(INDEX_DIR, "embeddings.index")):
+        print("[Webly] Crawling and indexing site...")
+        ingest_pipeline.run()
+        print("[Webly] Indexing complete.")
+
+    else:
+        db.load(INDEX_DIR)
+except Exception as e:
+    print(f"[Webly] Failed to initialize index: {e}")
+    sys.exit(1)
 
 
 # --- Query pipeline: embed query -> retrieve -> answer ---
@@ -85,7 +92,7 @@ query_pipeline = QueryPipeline(chat_agent=agent, score_threshold=SCORE_THRESHOLD
 
 # --- Run interactive CLI ---
 if __name__ == "__main__":
-    print("\n[Webly] Ready. Ask a question (press enter to quit):\n")
+    print("\n[Webly] Ready. \nAsk a question (press enter to quit):\n")
     while True:
         question = input("You: ").strip()
         if not question:
