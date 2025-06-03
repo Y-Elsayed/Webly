@@ -21,13 +21,19 @@ class QueryPipeline:
 
         top_score = max((r.get("score", 0) for r in results), default=0)
 
+        # If top score is too low and recrawl is allowed
         if retry_on_weak and top_score < self.score_threshold and self.recrawl_fn:
-            print(f"Top similarity score ({top_score:.2f}) below threshold ({self.score_threshold}). Triggering re-crawl.") # for debugging, will remove later and add logging
+            print(f"Top similarity score ({top_score:.2f}) below threshold ({self.score_threshold}). Triggering re-crawl.")
             self.recrawl_fn()
             results = self.chat_agent.vector_db.search(query_embedding, top_k=self.chat_agent.top_k)
+            top_score = max((r.get("score", 0) for r in results), default=0)
 
-        context = "\n\n".join([r.get("text") or r.get("markdown") or "" for r in results])
-        prompt = self.chat_agent.prompt_template.format(context=context, question=question)
-        answer = self.chat_agent.chatbot.generate(prompt)
+        print(f"Results: {results}")
+        # Build context string
+        context = "\n\n".join([r.get("text") or r.get("markdown") or "" for r in results]).strip()
 
-        return answer
+        if not context or top_score < self.score_threshold:
+            return "I'm sorry, I couldn't find any relevant information to answer that question."
+
+        return self.chat_agent.answer(question, context)
+
