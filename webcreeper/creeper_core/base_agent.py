@@ -1,5 +1,3 @@
-# creeper_core/base_agent.py
-
 from abc import ABC, abstractmethod
 from creeper_core.utils import configure_logging
 import requests
@@ -12,24 +10,21 @@ class BaseAgent(ABC):
         self.logger = configure_logging(self.__class__.__name__)
         self.robots_cache = {}
         self.blacklist = set()
+        self.visited = set()
 
     @abstractmethod
     def crawl(self):
-        """To be implemented by concrete crawlers."""
         pass
 
     @abstractmethod
     def process_data(self, data):
-        """To be implemented by concrete crawlers."""
         pass
 
     def fetch(self, url: str):
-        """
-        Fetches content from the given URL.
-        """
-        if url in self.blacklist or self.should_skip_url(url):
-            self.logger.info(f"Skipping blacklisted or filtered URL: {url}")
+        if not self.should_visit(url):
             return None
+
+        self.visited.add(url)
 
         try:
             self.logger.info(f"Fetching: {url}")
@@ -48,16 +43,10 @@ class BaseAgent(ABC):
             return None
 
     def get_home_url(self, url: str) -> str:
-        """
-        Extracts the home URL from a given URL.
-        """
         parsed_url = urlparse(url)
         return f"{parsed_url.scheme}://{parsed_url.netloc}"
 
     def fetch_robots_txt(self, url: str) -> str:
-        """
-        Fetches the robots.txt file from the domain.
-        """
         home_url = self.get_home_url(url)
         robots_url = f"{home_url}/robots.txt"
         try:
@@ -76,24 +65,6 @@ class BaseAgent(ABC):
             self.logger.error(f"Error accessing robots.txt: {e}")
             return None
 
-    def is_allowed_link(self, url: str) -> bool:
-        """
-        Determines whether a URL should be crawled.
-        """
-        if not self.is_allowed_domain(url):
-            self.logger.info(f"Domain {urlparse(url).netloc} is not allowed")
-            return False
-
-        if not self.is_allowed_by_robots(url):
-            self.logger.info(f"Link {url} is disallowed by robots.txt")
-            return False
-
-        if self.should_skip_url(url):
-            self.logger.info(f"Filtered out by path rules: {url}")
-            return False
-
-        return True
-
     def is_allowed_domain(self, url: str) -> bool:
         allowed_domains = self.settings.get('allowed_domains', [])
         parsed_url = urlparse(url)
@@ -111,7 +82,7 @@ class BaseAgent(ABC):
         if robots_txt:
             return self._is_url_allowed_by_robots_txt(url, robots_txt)
 
-        return True  # Allow if no robots.txt found
+        return True
 
     def _is_url_allowed_by_robots_txt(self, url: str, robots_txt: str) -> bool:
         parsed_url = urlparse(url)
@@ -146,6 +117,29 @@ class BaseAgent(ABC):
             return True
 
         return False
+
+    def should_visit(self, url: str) -> bool:
+        if url in self.visited:
+            self.logger.info(f"Already visited: {url}")
+            return False
+
+        if url in self.blacklist:
+            self.logger.info(f"Blacklisted URL: {url}")
+            return False
+
+        if not self.is_allowed_domain(url):
+            self.logger.info(f"Disallowed domain: {url}")
+            return False
+
+        if not self.is_allowed_by_robots(url):
+            self.logger.info(f"Blocked by robots.txt: {url}")
+            return False
+
+        if self.should_skip_url(url):
+            self.logger.info(f"Filtered by skip rules: {url}")
+            return False
+
+        return True
 
     def add_to_blacklist(self, urls: list[str] | str):
         if isinstance(urls, str):
