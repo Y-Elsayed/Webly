@@ -11,22 +11,20 @@ class Atlas(BaseAgent):
         "user_agent": "AtlasCrawler",
         "max_depth": 3,
         "allowed_domains": [],
-        "allowed_paths": [],                # Only crawl if path starts with one of these
-        "blocked_paths": [],               # Skip if path starts with one of these
-        "storage_path": "./data",          # Where to store output data
-        "crawl_entire_website": False,     # Whether to crawl full site or by depth
-        "save_results": True,              # Whether to save on_page_crawled results
-        "results_filename": "results.jsonl"  # One JSON per line, good for streaming
+        "allowed_paths": [],
+        "blocked_paths": [],
+        "storage_path": "./data",
+        "crawl_entire_website": False,
+        "save_results": True,
+        "results_filename": "results.jsonl"
     }
 
     def __init__(self, settings: dict = {}):
         self.settings = {**self.DEFAULT_SETTINGS, **settings}
         self.graph = {}
-        self.visited = set()
         self.max_depth = self.settings['max_depth']
         self.crawl_entire_website = self.settings['crawl_entire_website']
 
-        # Prepare result file path
         self.results_path = os.path.join(
             self.settings['storage_path'], self.settings['results_filename']
         )
@@ -35,16 +33,9 @@ class Atlas(BaseAgent):
         super().__init__(self.settings)
 
     def crawl(self, start_url: str, on_page_crawled=None, on_all_done=None):
-        """
-        Start crawling from the given start URL.
-        Optionally use:
-        - on_page_crawled: callback to process each page
-        - on_all_done: callback called after the entire crawl
-        """
         self.on_page_crawled = on_page_crawled
         self.on_all_done = on_all_done
 
-        # Clear existing results file if saving is enabled
         if self.settings["save_results"] and os.path.exists(self.results_path):
             open(self.results_path, "w").close()
 
@@ -55,7 +46,6 @@ class Atlas(BaseAgent):
             self.logger.info(f"Crawling with depth limit: {self.max_depth}")
             self._crawl_page(start_url)
 
-        # Optional post-crawl callback
         if self.on_all_done:
             self.on_all_done(self.graph)
 
@@ -64,28 +54,23 @@ class Atlas(BaseAgent):
             return
 
         self.logger.info(f"Crawling page: {url} (Depth: {depth})")
-        if not self.is_allowed_link(url) or not self.is_allowed_path(url):
+        if not self.should_visit(url) or not self.is_allowed_path(url):
             return
 
         content, content_type = self.fetch(url)
-        if "text/html" not in content_type:
+        if not content or "text/html" not in content_type:
             self.logger.info(f"Skipping non-HTML content: {url} [{content_type}]")
             return
 
-        self.visited.add(url)
-        links = []
-
-        if content:
-            links = self.extract_links(content, url)
-            if self.on_page_crawled:
-                result = self.on_page_crawled(url, content)
-                self._save_result(result)
+        links = self.extract_links(content, url)
+        if self.on_page_crawled:
+            result = self.on_page_crawled(url, content)
+            self._save_result(result)
 
         self.graph[url] = links
 
         for link in links:
-            if link not in self.visited:
-                self._crawl_page(link, depth + 1)
+            self._crawl_page(link, depth + 1)
 
     def _crawl_entire_site(self, start_url: str):
         domain = self.get_home_url(start_url)
@@ -93,48 +78,38 @@ class Atlas(BaseAgent):
 
         while to_visit:
             url = to_visit.pop(0)
-            if url in self.visited or not self.is_allowed_link(url) or not self.is_allowed_path(url):
+            if not self.should_visit(url) or not self.is_allowed_path(url):
                 continue
 
             self.logger.info(f"Crawling page: {url}")
             content, content_type = self.fetch(url)
-            if "text/html" not in content_type:
+            if not content or "text/html" not in content_type:
                 self.logger.info(f"Skipping non-HTML content: {url} [{content_type}]")
                 continue
-            self.visited.add(url)
-            links = []
 
-            if content:
-                links = self.extract_links(content, url)
-                if self.on_page_crawled:
-                    result = self.on_page_crawled(url, content)
-                    self._save_result(result)
+            links = self.extract_links(content, url)
+            if self.on_page_crawled:
+                result = self.on_page_crawled(url, content)
+                self._save_result(result)
 
             self.graph[url] = links
 
             for link in links:
-                if link not in self.visited and link.startswith(domain):
+                if link.startswith(domain) and link not in to_visit:
                     to_visit.append(link)
 
     def extract_links(self, page_content: str, base_url: str) -> list:
-        """
-        Extract links from the page content using BeautifulSoup.
-        Returns absolute links within the allowed domain.
-        """
         soup = BeautifulSoup(page_content, 'html.parser')
         links = set()
 
         for anchor in soup.find_all('a', href=True):
             full_url = urljoin(base_url, anchor['href'])
-            if self.is_allowed_link(full_url) and self.is_allowed_path(full_url):
+            if self.should_visit(full_url) and self.is_allowed_path(full_url):
                 links.add(full_url)
 
         return list(links)
 
     def is_allowed_path(self, url: str) -> bool:
-        """
-        Check if the URL's path passes allowed_paths and blocked_paths filters.
-        """
         path = urlparse(url).path
         allowed_paths = self.settings.get("allowed_paths", [])
         blocked_paths = self.settings.get("blocked_paths", [])
@@ -155,7 +130,4 @@ class Atlas(BaseAgent):
         save_json(file_path, data)
 
     def get_graph(self):
-        """
-        Return the graph (dictionary of pages and their outgoing links).
-        """
         return self.graph
