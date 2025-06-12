@@ -69,7 +69,8 @@ ingest_pipeline = IngestPipeline(
     index_path=INDEX_DIR,
     embedder=embedder,
     db=db,
-    summarizer=summarizer
+    summarizer=summarizer,
+    use_summary=False
 )
 
 try:
