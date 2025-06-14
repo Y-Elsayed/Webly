@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from creeper_core.utils import configure_logging
 import requests
 from urllib.parse import urlparse, parse_qs
+import re
 
 class BaseAgent(ABC):
 
@@ -11,6 +12,10 @@ class BaseAgent(ABC):
         self.robots_cache = {}
         self.blacklist = set()
         self.visited = set()
+        # Compile user-defined skip patterns (as regex)
+        self.skip_url_patterns = [
+            re.compile(p) for p in self.settings.get("skip_url_patterns", [])
+        ]
 
     @abstractmethod
     def crawl(self):
@@ -106,17 +111,26 @@ class BaseAgent(ABC):
 
     def should_skip_url(self, url: str) -> bool:
         parsed = urlparse(url)
-        path = parsed.path.lower()
+        path = parsed.path
+        full_url = url
         query = parse_qs(parsed.query)
 
-        SKIP_PATHS = ["/login", "/signup", "/reset", "/auth", "/u/", "/donate"]
-        if any(skip in path for skip in SKIP_PATHS):
+        # Heuristic skip rules (can be disabled by user)
+        if self.settings.get("heuristic_skip_long_urls", True) and len(url) > 200:
             return True
 
-        if len(url) > 200 or "state" in query:
+        if self.settings.get("heuristic_skip_state_param", True) and "state" in query:
             return True
+
+        # User-defined regex skip rules
+        for pattern in self.skip_url_patterns:
+            if pattern.search(full_url) or pattern.search(path):
+                self.logger.info(f"URL skipped by pattern: {pattern.pattern}")
+                return True
 
         return False
+
+
 
     def should_visit(self, url: str) -> bool:
         if url in self.visited:

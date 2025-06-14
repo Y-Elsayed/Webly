@@ -16,7 +16,10 @@ class Atlas(BaseAgent):
         "storage_path": "./data",
         "crawl_entire_website": False,
         "save_results": True,
-        "results_filename": "results.jsonl"
+        "results_filename": "results.jsonl",
+        "heuristic_skip_long_urls": True,
+        "heuristic_skip_state_param": True,
+        
     }
 
     def __init__(self, settings: dict = {}):
