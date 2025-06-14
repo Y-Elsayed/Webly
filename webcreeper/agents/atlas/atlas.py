@@ -12,6 +12,7 @@ class Atlas(BaseAgent):
         "max_depth": 3,
         "allowed_domains": [],
         "allowed_paths": [],
+        "allow_url_patterns" : [],
         "blocked_paths": [],
         "storage_path": "./data",
         "crawl_entire_website": False,

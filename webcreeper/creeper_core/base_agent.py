@@ -16,6 +16,10 @@ class BaseAgent(ABC):
         self.skip_url_patterns = [
             re.compile(p) for p in self.settings.get("skip_url_patterns", [])
         ]
+        # white list system (the urls to visit)
+        self.allow_url_patterns = [
+            re.compile(p) for p in self.settings.get("allow_url_patterns", [])
+        ]
 
     @abstractmethod
     def crawl(self):
@@ -108,6 +112,19 @@ class BaseAgent(ABC):
             if path.startswith(disallowed_path):
                 return False
         return True
+    
+    def is_allowed_by_patterns(self, url: str) -> bool:
+        # If no allow patterns are set, allow all
+        if not self.allow_url_patterns:
+            return True
+
+        for pattern in self.allow_url_patterns:
+            if pattern.search(url):
+                return True
+
+        self.logger.info(f"URL blocked by allow patterns: {url}")
+        return False
+
 
     def should_skip_url(self, url: str) -> bool:
         parsed = urlparse(url)
@@ -151,6 +168,9 @@ class BaseAgent(ABC):
 
         if self.should_skip_url(url):
             self.logger.info(f"Filtered by skip rules: {url}")
+            return False
+        
+        if not self.is_allowed_by_patterns(url):
             return False
 
         return True
