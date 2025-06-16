@@ -1,5 +1,5 @@
 from webcreeper.agents.atlas.atlas import Atlas
-from handlers import HTMLSaver
+from .handlers import HTMLSaver
 
 class Crawler:
     def __init__(self, start_url: str, allowed_domains: list, output_dir: str, results_filename: str = "results.jsonl", default_callback=None, default_settings=None):
