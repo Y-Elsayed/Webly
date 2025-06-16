@@ -1,14 +1,21 @@
-class TextChunker:
-    def __init__(self, chunk_size=200, chunk_overlap=50):
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
+class PageProcessor:
+    def __init__(self, extractor, chunker):
+        self.extractor = extractor
+        self.chunker = chunker
 
-    def split(self, text: str) -> list[str]:
-        words = text.split()
-        chunks = []
-        i = 0
-        while i < len(words):
-            chunk = " ".join(words[i:i + self.chunk_size])
-            chunks.append(chunk.strip())
-            i += self.chunk_size - self.chunk_overlap
-        return chunks
+    def process(self, url: str, html: str) -> list[dict]:
+        extracted = self.extractor(url, html)
+        text = extracted.get("text")
+        if not text:
+            return []
+
+        chunks = self.chunker.split(text)
+        return [
+            {
+                "url": url,
+                "chunk_index": i,
+                "text": chunk,
+                "length": len(chunk)
+            }
+            for i, chunk in enumerate(chunks)
+        ]
