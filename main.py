@@ -88,7 +88,7 @@ except Exception as e:
 
 # --- Query pipeline: embed query -> retrieve -> answer ---
 agent = WeblyChatAgent(embedder, db, chatbot)
-query_pipeline = QueryPipeline(chat_agent=agent, score_threshold=SCORE_THRESHOLD)
+query_pipeline = QueryPipeline(chat_agent=agent)
 
 
 # --- Run interactive CLI ---
