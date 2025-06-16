@@ -5,6 +5,9 @@ from crawl.crawler import Crawler
 from embedder.base_embedder import Embedder
 from storage.vector_db import VectorDatabase
 from processors.text_summarizer import TextSummarizer
+from processors.page_processor import PageProcessor
+from processors.text_extractor import TrafilaturaTextExtractor
+from processors.text_chunker import TextChunker
 
 class IngestPipeline:
     def __init__(
@@ -27,6 +30,12 @@ class IngestPipeline:
             crawler.output_dir, crawler.results_filename
         )
 
+        # Extractor + Chunker setup
+        self.page_processor = PageProcessor(
+            extractor=TrafilaturaTextExtractor(),
+            chunker=TextChunker()
+        )
+
     def extract(self, override_callback=None, settings_override: dict = None):
         print("[IngestPipeline] Crawling site...")
         self.crawler.crawl(
@@ -43,42 +52,46 @@ class IngestPipeline:
 
         with open(self.results_path, "r", encoding="utf-8") as f:
             for line in f:
-                record = json.loads(line)
-                text = record.get("markdown")
-                if not text:
-                    continue
-
                 try:
-                    content_to_embed = text
-                    summary_text = None
-
-                    if self.use_summary:
-                        summary_data = self.summarizer(record["url"], text)
-                        if not summary_data or "summary" not in summary_data:
-                            print(f"[IngestPipeline] Skipping {record['url']} - summarizer returned nothing.")
-                            continue
-                        summary_text = summary_data["summary"]
-                        content_to_embed = summary_text
-                        record["summary"] = summary_text
-
-                    embedding = self.embedder.embed(content_to_embed)
-                    if embedding is None:
-                        print(f"[IngestPipeline] Skipping {record['url']} - embedding failed.")
+                    record = json.loads(line)
+                    url = record.get("url")
+                    html = record.get("html")
+                    if not html:
                         continue
 
-                    record["embedding"] = embedding
+                    chunks = self.page_processor.process(url, html)
+                    for chunk in chunks:
+                        content_to_embed = chunk["text"]
+                        summary_text = None
 
-                    json.dump({
-                        "url": record["url"],
-                        "original": text[:1000],
-                        "summary": summary_text if self.use_summary else None
-                    }, summary_debug_file)
-                    summary_debug_file.write("\n")
+                        if self.use_summary:
+                            summary_data = self.summarizer(url, content_to_embed)
+                            if not summary_data or "summary" not in summary_data:
+                                print(f"[IngestPipeline] Skipping chunk from {url} - summarizer returned nothing.")
+                                continue
+                            summary_text = summary_data["summary"]
+                            content_to_embed = summary_text
+                            chunk["summary"] = summary_text
 
-                    transformed_records.append(record)
+                        embedding = self.embedder.embed(content_to_embed)
+                        if embedding is None:
+                            print(f"[IngestPipeline] Skipping chunk from {url} - embedding failed.")
+                            continue
+
+                        chunk["embedding"] = embedding
+
+                        json.dump({
+                            "url": chunk["url"],
+                            "chunk_index": chunk["chunk_index"],
+                            "original": chunk["text"][:500],
+                            "summary": summary_text if self.use_summary else None
+                        }, summary_debug_file)
+                        summary_debug_file.write("\n")
+
+                        transformed_records.append(chunk)
 
                 except Exception as e:
-                    print(f"[IngestPipeline] Skipping {record['url']} due to error: {e}")
+                    print(f"[IngestPipeline] Skipping record due to error: {e}")
 
         summary_debug_file.close()
         print(f"[IngestPipeline] Wrote debug summaries to {debug_summary_path}")
