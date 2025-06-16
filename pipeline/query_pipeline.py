@@ -20,14 +20,15 @@ class QueryPipeline:
             self.recrawl_fn()
             results = self.chat_agent.vector_db.search(query_embedding, top_k=self.chat_agent.top_k)
             top_score = max((r.get("score", 0) for r in results), default=0)
-
+        print(f"Top score: {top_score}")
         if not results or top_score < self.score_threshold:
             return "I'm sorry, I couldn't find any relevant information to answer that question."
 
         context = "\n\n".join([
-            f"Source: {r.get('metadata', {}).get('url', 'N/A')}\n{r['text']}"
+            f"Source: {r.get('url', 'N/A')}\n{r.get('text', '')}"
             for r in results if "text" in r
         ]).strip()
+
 
         if not context:
             return "I'm sorry, I couldn't find any relevant information to answer that question."
