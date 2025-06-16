@@ -6,6 +6,6 @@
   "results_file": "results.jsonl",
   "embedding_model": "all-MiniLM-L6-v2",
   "embedding_field": "markdown",
-  "score_threshold": 0.7,
+  "score_threshold": 0.6,
   "chat_model": "gpt-4o-mini"
 }
