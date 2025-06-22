@@ -61,7 +61,12 @@ class Atlas(BaseAgent):
         if not self.should_visit(url) or not self.is_allowed_path(url):
             return
 
-        content, content_type = self.fetch(url)
+        fetched = self.fetch(url)
+        if not fetched:
+            self.logger.info(f"Skipping {url} - failed to fetch.")
+            return
+        content, content_type = fetched
+
         if not content or "text/html" not in content_type:
             self.logger.info(f"Skipping non-HTML content: {url} [{content_type}]")
             return
@@ -69,7 +74,11 @@ class Atlas(BaseAgent):
         links = self.extract_links(content, url)
         if self.on_page_crawled:
             result = self.on_page_crawled(url, content)
+            if not isinstance(result, dict):
+                self.logger.warning(f"on_page_crawled for {url} returned invalid result: {result}")
+                result = {}
             self._save_result(result)
+
 
         self.graph[url] = links
 
@@ -86,7 +95,12 @@ class Atlas(BaseAgent):
                 continue
 
             self.logger.info(f"Crawling page: {url}")
-            content, content_type = self.fetch(url)
+            fetched = self.fetch(url)
+            if not fetched:
+                self.logger.info(f"Skipping {url} - failed to fetch.")
+                return
+            content, content_type = fetched
+
             if not content or "text/html" not in content_type:
                 self.logger.info(f"Skipping non-HTML content: {url} [{content_type}]")
                 continue
@@ -94,7 +108,11 @@ class Atlas(BaseAgent):
             links = self.extract_links(content, url)
             if self.on_page_crawled:
                 result = self.on_page_crawled(url, content)
+                if not isinstance(result, dict):
+                    self.logger.warning(f"on_page_crawled for {url} returned invalid result: {result}")
+                    result = {}
                 self._save_result(result)
+
 
             self.graph[url] = links
 
@@ -125,8 +143,16 @@ class Atlas(BaseAgent):
         return True
 
     def _save_result(self, result: dict):
-        if self.settings["save_results"] and result:
+        if not isinstance(result, dict):
+            return
+        if "url" not in result or "html" not in result or not result["html"]:
+            self.logger.debug(f"Skipping result due to missing fields: {result}")
+            return
+        if self.settings["save_results"]:
             save_jsonl_line(self.results_path, result)
+
+
+
 
     def process_data(self, data, file_path=None):
         if file_path is None:
