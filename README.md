@@ -2,7 +2,7 @@
 
 **Webly** is a modular, GenAI-powered web crawling and knowledge extraction framework. It transforms any website into a structured, searchable knowledge base — enabling intelligent search, chatbots, and Retrieval-Augmented Generation (RAG) pipelines.
 
-> _"Webly makes it feel like the website itself is answering your questions."_
+> _"Webly makes it feel like the website itself is answering your questions."_ (By: Me)
 
 ---
 
