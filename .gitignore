@@ -177,5 +177,4 @@ cython_debug/
 TODO.md
 .env
 log/
-out/
-out_test/
+out*/
