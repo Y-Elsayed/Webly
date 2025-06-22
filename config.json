@@ -1,11 +1,9 @@
 {
-  "start_url": "https://jsonplaceholder.typicode.com/",
-  "allowed_domains": ["jsonplaceholder.typicode.com"],
-  "output_dir": "./out_test",
-  "index_dir": "./out_test/index",
+  "start_url": "https://eui.edu.eg/",
+  "allowed_domains": ["eui.edu.eg"],
+  "output_dir": "./out_eui",
+  "index_dir": "./out_eui/index",
   "results_file": "results.jsonl",
   "embedding_model": "all-MiniLM-L6-v2",
-  "embedding_field": "markdown",
-  "score_threshold": 0.6,
   "chat_model": "gpt-4o-mini"
 }
