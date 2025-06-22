@@ -32,11 +32,11 @@ Whether you're building a smart FAQ bot or a semantic search engine over documen
 
 ## ⚙️ Key Features
 
-- 🧩 **Modular pipeline** with clear separation of crawling, extraction, summarization, embedding, and storage  
-- 🏗️ **Built on WebCreeper**, a custom-designed, extensible web crawling framework  
-- 🪜 **Pluggable architecture**: use your own chunker, summarizer, embedder, or vector DB  
-- 🧵 **CLI-ready and interactive mode** — start chatting with any website in minutes  
-- 📈 **Debug output and summary logs** for easy traceability
+-  **Modular pipeline** with clear separation of crawling, extraction, summarization, embedding, and storage  
+-  **Built on WebCreeper**, a custom-designed, extensible web crawling framework  
+- **Pluggable architecture**: use your own chunker, summarizer, embedder, or vector DB  
+-  **CLI-ready and interactive mode** — start chatting with any website in minutes  
+-  **Debug output and summary logs** for easy traceability
 
 ---
 
