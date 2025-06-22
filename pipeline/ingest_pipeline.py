@@ -9,6 +9,7 @@ from processors.page_processor import PageProcessor
 from processors.text_extractor import TrafilaturaTextExtractor
 from processors.text_chunker import TextChunker
 
+
 class IngestPipeline:
     def __init__(
         self,
@@ -18,7 +19,9 @@ class IngestPipeline:
         db: VectorDatabase,
         summarizer: TextSummarizer,
         results_path: Optional[str] = None,
-        use_summary: bool = True
+        use_summary: bool = True,
+        debug: bool = False,
+        debug_summary_path: Optional[str] = None
     ):
         self.crawler = crawler
         self.index_path = index_path
@@ -29,12 +32,21 @@ class IngestPipeline:
         self.results_path = results_path or os.path.join(
             crawler.output_dir, crawler.results_filename
         )
+        self.debug = debug
+
+        if debug_summary_path:
+            self.debug_summary_path = debug_summary_path
+        else:
+            debug_dir = os.path.join(crawler.output_dir, "debug")
+            os.makedirs(debug_dir, exist_ok=True)
+            self.debug_summary_path = os.path.join(debug_dir, "summaries_full.jsonl")
 
         # Extractor + Chunker setup
         self.page_processor = PageProcessor(
             extractor=TrafilaturaTextExtractor(),
             chunker=TextChunker()
         )
+
 
     def extract(self, override_callback=None, settings_override: dict = None):
         print("[IngestPipeline] Crawling site...")
@@ -44,11 +56,11 @@ class IngestPipeline:
         )
 
     def transform(self) -> List[dict]:
-        print("[IngestPipeline] Transforming pages (summarize =", self.use_summary, ")")
+        print(f"[IngestPipeline] Transforming pages (summarize = {self.use_summary})")
         self.db.create(dim=self.embedder.dim)
         transformed_records = []
-        debug_summary_path = "summaries_full.jsonl"
-        summary_debug_file = open(debug_summary_path, "w", encoding="utf-8")
+
+        summary_debug_file = open(self.debug_summary_path, "w", encoding="utf-8") if self.debug else None
 
         with open(self.results_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -56,14 +68,18 @@ class IngestPipeline:
                     record = json.loads(line)
                     url = record.get("url")
                     html = record.get("html")
-                    if not html:
+
+                    if not url or not html:
+                        print(f"[IngestPipeline] Skipping malformed record (missing url or html): {record}")
                         continue
 
                     chunks = self.page_processor.process(url, html)
                     for chunk in chunks:
-                        content_to_embed = chunk["text"]
-                        summary_text = None
+                        content_to_embed = chunk.get("text", "")
+                        if not content_to_embed.strip():
+                            continue
 
+                        summary_text = None
                         if self.use_summary:
                             summary_data = self.summarizer(url, content_to_embed)
                             if not summary_data or "summary" not in summary_data:
@@ -80,21 +96,24 @@ class IngestPipeline:
 
                         chunk["embedding"] = embedding
 
-                        json.dump({
-                            "url": chunk["url"],
-                            "chunk_index": chunk["chunk_index"],
-                            "original": chunk["text"][:500],
-                            "summary": summary_text if self.use_summary else None
-                        }, summary_debug_file)
-                        summary_debug_file.write("\n")
+                        if self.debug and summary_debug_file:
+                            json.dump({
+                                "url": chunk.get("url", "N/A"),
+                                "chunk_index": chunk.get("chunk_index", -1),
+                                "original": chunk.get("text", "")[:500],
+                                "summary": summary_text if self.use_summary else None
+                            }, summary_debug_file)
+                            summary_debug_file.write("\n")
 
                         transformed_records.append(chunk)
 
                 except Exception as e:
                     print(f"[IngestPipeline] Skipping record due to error: {e}")
 
-        summary_debug_file.close()
-        print(f"[IngestPipeline] Wrote debug summaries to {debug_summary_path}")
+        if summary_debug_file:
+            summary_debug_file.close()
+            print(f"[IngestPipeline] Wrote debug summaries to {self.debug_summary_path}")
+
         return transformed_records
 
     def load(self, records: List[dict]):
