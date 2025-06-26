@@ -2,33 +2,48 @@ import string
 from chatbot.base_chatbot import Chatbot
 
 class WeblyChatAgent:
-    def __init__(self, embedder, vector_db, chatbot: Chatbot, top_k=5, prompt_template=None):
+    def __init__(
+        self,
+        embedder,
+        vector_db,
+        chatbot: Chatbot,
+        top_k=5,
+        prompt_template=None,
+        system_prompt: str = None 
+    ):
         self.embedder = embedder
         self.vector_db = vector_db
         self.chatbot = chatbot
         self.top_k = top_k
 
-        self.system_prompt = (
-            "You are an intelligent assistant helping users understand a specific website.\n\n"
-            "You will be given:\n"
-            "- A user question.\n"
-            "- A set of documents retrieved from the website.\n\n"
-            "Your task is to answer the question only if the documents contain enough relevant information "
-            "to produce an accurate, helpful, and website-specific answer.\n\n"
-            "Rules:\n"
-            "1. If the documents include enough relevant information, answer confidently.\n"
-            "2. If the question is clearly about the website (e.g., 'What is this website about?'), try your best "
-            "to infer from what's available.\n"
-            "3. If the question is unrelated (e.g., 'How do I swim?'), and no related info is present, do NOT answer.\n"
-            "4. If you cannot confidently answer, respond only with the letter: \"N\"\n\n"
-            "Never make up answers. Only use the content and purpose of the website."
-        )
+        default_system_prompt = """
+        You are a helpful, intelligent assistant designed to answer questions about the content and purpose of a specific website.
+
+        You are conversational but do not overdo greetings — respond naturally to user tone. Only greet if the user greets you first and it fits the flow.
+
+        You never make up information. You only use the retrieved website content provided to you.
+
+        Your behavior should follow these rules:
+
+        1. If the user’s question is clearly related to the website and you have enough relevant information, respond confidently and naturally.
+        2. If the user asks about the general purpose of the website, summarize it based on the available content.
+        3. If the question is unrelated to the website, or if the content is insufficient to provide a helpful answer, respond only with the letter: "N".
+        4. If the answer is based on a specific section of the website, include the link to that section if it was provided in the content.
+        5. Never say “according to the documents” unless it adds real clarity — write as if you're naturally knowledgeable but strictly based on the provided content.
+
+        You are not a generic chatbot — your only knowledge comes from the retrieved website content.
+        """
+
+
+        self.system_prompt = system_prompt or default_system_prompt
 
         default_prompt = (
-            "User Question:\n{question}\n\nRetrieved Documents:\n{context}"
+            "User: {question}\n\n"
+            "Website Content:\n{context}"
         )
         self.prompt_template = prompt_template or default_prompt
 
+        # Ensure required placeholders exist in the prompt template
         required_fields = {"context", "question"}
         found_fields = {
             field_name
@@ -46,7 +61,7 @@ class WeblyChatAgent:
             return "I'm sorry, I couldn't find any relevant information to answer that question."
 
         prompt = self.prompt_template.format(context=context, question=question)
-        full_prompt = f"{self.system_prompt}\n\n{prompt}"
+        full_prompt = f"{self.system_prompt.strip()}\n\n{prompt.strip()}"
 
         response = self.chatbot.generate(full_prompt).strip()
 
