@@ -27,7 +27,6 @@ def load_config():
         return json.load(f)
 
 def save_config(cfg):
-    # os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
     with open(CONFIG_PATH, "w") as f:
         json.dump(cfg, f, indent=2)
 
@@ -65,6 +64,31 @@ if st.sidebar.button("Save Settings"):
 # === Main Interface ===
 st.title("Webly")
 
+st.markdown("""
+<style>
+.user-bubble {
+    background-color: #808080;
+    padding: 10px 15px;
+    border-radius: 12px;
+    margin: 10px 0;
+    max-width: 80%;
+    align-self: flex-end;
+}
+.webly-bubble {
+    background-color: #808080;
+    padding: 10px 15px;
+    border-radius: 12px;
+    margin: 10px 0;
+    max-width: 80%;
+    align-self: flex-start;
+}
+.chat-container {
+    display: flex;
+    flex-direction: column;
+}
+</style>
+""", unsafe_allow_html=True)
+
 if st.button("Run Indexing"):
     with st.spinner("Running the ingestion pipeline..."):
         ingest_pipeline.run()
@@ -82,6 +106,8 @@ if query:
     response = query_pipeline.query(query)
     st.session_state.chat_history.append((query, response))
 
+st.markdown('<div class="chat-container">', unsafe_allow_html=True)
 for q, r in st.session_state.chat_history:
-    st.markdown(f"**You:** {q}")
-    st.markdown(f"**Webly:** {r}")
+    st.markdown(f'<div class="user-bubble"><strong>You:</strong> {q}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="webly-bubble"><strong>Webly:</strong> {r}</div>', unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
