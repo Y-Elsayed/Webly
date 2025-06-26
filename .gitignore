@@ -178,3 +178,4 @@ TODO.md
 .env
 log/
 out*/
+config.json
