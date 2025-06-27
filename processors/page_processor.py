@@ -1,3 +1,7 @@
+from typing import List
+from text_chunkers import SemanticChunker
+
+# Basic for now
 class PageProcessor:
     def __init__(self, extractor, chunker):
         self.extractor = extractor
@@ -19,3 +23,11 @@ class PageProcessor:
             }
             for i, chunk in enumerate(chunks)
         ]
+
+
+class SemanticPageProcessor:
+    def __init__(self, chunker: SemanticChunker):
+        self.chunker = chunker
+
+    def process(self, url: str, html: str) -> List[dict]:
+        return self.chunker.chunk_html(html, url)
