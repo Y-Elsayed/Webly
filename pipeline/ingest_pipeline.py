@@ -5,9 +5,8 @@ from crawl.crawler import Crawler
 from embedder.base_embedder import Embedder
 from storage.vector_db import VectorDatabase
 from processors.text_summarizer import TextSummarizer
-from processors.page_processor import PageProcessor
-from processors.text_extractor import TrafilaturaTextExtractor
-from processors.text_chunker import TextChunker
+from processors.page_processor import SemanticPageProcessor
+from processors.text_chunkers import SemanticChunker
 
 
 class IngestPipeline:
@@ -41,11 +40,10 @@ class IngestPipeline:
             os.makedirs(debug_dir, exist_ok=True)
             self.debug_summary_path = os.path.join(debug_dir, "summaries_full.jsonl")
 
-        # Extractor + Chunker setup
-        self.page_processor = PageProcessor(
-            extractor=TrafilaturaTextExtractor(),
-            chunker=TextChunker()
+        self.page_processor = SemanticPageProcessor(
+            chunker=SemanticChunker()
         )
+
 
 
     def extract(self, override_callback=None, settings_override: dict = None):
