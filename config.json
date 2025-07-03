@@ -1,14 +1,14 @@
 {
-  "start_url": "https://www.bue.edu.eg/research",
+  "start_url": "https://eui.edu.eg/",
   "allowed_domains": [
-    "https://www.bue.edu.eg/research"
+    "eui.edu.eg"
   ],
   "output_dir": "./out_eui",
   "index_dir": "./out_eui/index",
   "results_file": "results.jsonl",
   "embedding_model": "all-MiniLM-L6-v2",
   "chat_model": "gpt-4o-mini",
-  "score_threshold": 0.05,
+  "score_threshold": 0.5,
   "crawl_entire_site": true,
   "exclude_patterns": [],
   "url_patterns": []
