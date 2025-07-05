@@ -6,8 +6,8 @@ from embedder.base_embedder import Embedder
 from storage.vector_db import VectorDatabase
 from processors.text_summarizer import TextSummarizer
 from processors.page_processor import SemanticPageProcessor
-from processors.text_chunkers import SemanticChunker
-
+from processors.text_chunkers import HeaderSlidingChunker
+from processors.text_extractors import DefaultTextExtractor
 
 class IngestPipeline:
     def __init__(
@@ -39,12 +39,12 @@ class IngestPipeline:
             debug_dir = os.path.join(crawler.output_dir, "debug")
             os.makedirs(debug_dir, exist_ok=True)
             self.debug_summary_path = os.path.join(debug_dir, "summaries_full.jsonl")
+            self.debug_chunks_path = os.path.join(debug_dir, "raw_chunks.jsonl")
 
         self.page_processor = SemanticPageProcessor(
-            chunker=SemanticChunker()
+            extractor=DefaultTextExtractor(),
+            chunker=HeaderSlidingChunker()
         )
-
-
 
     def extract(self, override_callback=None, settings_override: dict = None):
         print("[IngestPipeline] Crawling site...")
@@ -59,6 +59,7 @@ class IngestPipeline:
         transformed_records = []
 
         summary_debug_file = open(self.debug_summary_path, "w", encoding="utf-8") if self.debug else None
+        chunk_debug_file = open(self.debug_chunks_path, "w", encoding="utf-8") if self.debug else None
 
         with open(self.results_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -74,8 +75,18 @@ class IngestPipeline:
                     chunks = self.page_processor.process(url, html)
                     for chunk in chunks:
                         content_to_embed = chunk.get("text", "")
-                        if not content_to_embed.strip():
+                        if not isinstance(content_to_embed, str) or not content_to_embed.strip():
                             continue
+
+                        # Debug: write raw chunks
+                        if self.debug and chunk_debug_file:
+                            json.dump({
+                                "url": chunk.get("url", url),
+                                "chunk_index": chunk.get("chunk_index", -1),
+                                "text": content_to_embed,
+                                "length": len(content_to_embed.split())
+                            }, chunk_debug_file)
+                            chunk_debug_file.write("\n")
 
                         summary_text = None
                         if self.use_summary:
@@ -111,6 +122,10 @@ class IngestPipeline:
         if summary_debug_file:
             summary_debug_file.close()
             print(f"[IngestPipeline] Wrote debug summaries to {self.debug_summary_path}")
+
+        if chunk_debug_file:
+            chunk_debug_file.close()
+            print(f"[IngestPipeline] Wrote raw chunks to {self.debug_chunks_path}")
 
         return transformed_records
 
