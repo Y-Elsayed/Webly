@@ -62,6 +62,7 @@ class WeblyChatAgent:
 
         prompt = self.prompt_template.format(context=context, question=question)
         full_prompt = f"{self.system_prompt.strip()}\n\n{prompt.strip()}"
+        print(full_prompt)
 
         response = self.chatbot.generate(full_prompt).strip()
 
