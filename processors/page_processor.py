@@ -1,5 +1,4 @@
 from typing import List
-from .text_chunkers import HeaderSlidingChunker
 
 
 class PageProcessor:
@@ -13,7 +12,7 @@ class PageProcessor:
         if not text:
             return []
 
-        chunks = self.chunker.chunk_text(text)
+        chunks = self.chunker.chunk_html(text)
         return [
             {
                 "url": url,
@@ -26,7 +25,7 @@ class PageProcessor:
 
 
 class SemanticPageProcessor:
-    def __init__(self, extractor, chunker: HeaderSlidingChunker):
+    def __init__(self, extractor, chunker):
         self.extractor = extractor
         self.chunker = chunker
 
@@ -40,8 +39,10 @@ class SemanticPageProcessor:
             {
                 "url": url,
                 "chunk_index": i,
-                "text": chunk,
-                "length": len(chunk)
+                "text": chunk["text"] if isinstance(chunk, dict) else chunk,
+                "length": len(chunk["text"].split()) if isinstance(chunk, dict) else len(chunk.split())
             }
-            for i, chunk in enumerate(self.chunker.chunk_text(text))
+            for i, chunk in enumerate(self.chunker.chunk_html(text, url))
         ]
+
+
