@@ -1,42 +1,85 @@
 from bs4 import BeautifulSoup, Tag
 from typing import List, Dict
 import uuid
-import re
 
-class HeaderSlidingChunker:
+class SlidingTextChunker:
     def __init__(self, max_words: int = 350, overlap: int = 50):
-        """
-        Args:
-            max_words: Max number of words in a chunk before splitting.
-            overlap: Number of words to include from previous chunk (sliding window).
-        """
         self.max_words = max_words
         self.overlap = overlap
 
-    def _split_by_heading(self, text: str) -> List[str]:
-        """
-        Splits text by level 1 headings (# Header).
-        """
-        sections = re.split(r"(?=^#\s)", text, flags=re.MULTILINE)
-        return [section.strip() for section in sections if section.strip()]
+    def _clean_html(self, html: str) -> BeautifulSoup:
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup(["script", "style", "noscript", "footer", "nav", "form"]):
+            tag.decompose()
+        return soup
 
     def _sliding_window_chunks(self, text: str) -> List[str]:
-        """
-        Splits long text into overlapping chunks using a sliding window.
-        """
         words = text.split()
         chunks = []
         i = 0
         while i < len(words):
             chunk_words = words[i:i + self.max_words]
             chunks.append(" ".join(chunk_words))
-            i += self.max_words - self.overlap  # Move window
+            i += self.max_words - self.overlap
         return chunks
 
-    def chunk_text(self, text: str) -> List[str]:
-        sections = self._split_by_heading(text)
+    def _group_by_headings(self, soup: BeautifulSoup) -> List[str]:
+        sections = []
+        current_section = []
+
+        heading_tags = ["h1", "h2", "h3", "h4", "h5", "h6"]
+        body = soup.body or soup
+
+        for el in body.descendants:
+            if isinstance(el, Tag):
+                if el.name in heading_tags:
+                    if current_section:
+                        sections.append(" ".join(current_section))
+                        current_section = []
+                    current_section.append(el.get_text(strip=True))
+                elif el.name in ["p", "li", "span", "pre", "td", "code"]:
+                    text = el.get_text(strip=True)
+                    if text:
+                        current_section.append(text)
+
+        if current_section:
+            sections.append(" ".join(current_section))
+        return sections
+
+    def _extract_div_blocks(self, soup: BeautifulSoup) -> List[str]:
+        div_blocks = []
+        for div in soup.find_all("div"):
+            text = div.get_text(separator=" ", strip=True)
+            if text and len(text.split()) > 10:
+                div_blocks.append(text)
+        return div_blocks
+
+    def chunk_html(self, html: str, url: str) -> List[Dict]:
+        soup = self._clean_html(html)
+
+        # Try structured heading chunking first
+        sections = self._group_by_headings(soup)
+
+        # Fallback to divs if no heading sections
+        if not sections:
+            sections = self._extract_div_blocks(soup)
+
+        # Last fallback: whole body
+        if not sections:
+            body = soup.body or soup
+            full_text = body.get_text(separator=" ", strip=True)
+            sections = [full_text] if full_text else []
+
         all_chunks = []
         for section in sections:
-            section_chunks = self._sliding_window_chunks(section)
-            all_chunks.extend(section_chunks)
-        return all_chunks 
+            for chunk in self._sliding_window_chunks(section):
+                all_chunks.append({
+                    "id": str(uuid.uuid4()),
+                    "url": url,
+                    "text": chunk,
+                    "tokens": len(chunk.split())
+                })
+
+        return all_chunks
+
+DefaultChunker = SlidingTextChunker
