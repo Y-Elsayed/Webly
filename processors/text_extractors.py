@@ -62,4 +62,12 @@ class MarkdownTextExtractor(TextExtractor):
         }
 
 
+class RawHTMLExtractor(TextExtractor):
+    def __call__(self, url: str, html: str) -> dict:
+        return {
+            "url": url,
+            "text": html,
+            "length": len(html)
+        }
+
 DefaultTextExtractor = TrafilaturaTextExtractor
