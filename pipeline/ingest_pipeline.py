@@ -6,7 +6,7 @@ from embedder.base_embedder import Embedder
 from storage.vector_db import VectorDatabase
 from processors.text_summarizer import TextSummarizer
 from processors.page_processor import SemanticPageProcessor
-from processors.text_chunkers import HeaderSlidingChunker
+from processors.text_chunkers import DefaultChunker
 from processors.text_extractors import DefaultTextExtractor
 
 class IngestPipeline:
@@ -43,7 +43,7 @@ class IngestPipeline:
 
         self.page_processor = SemanticPageProcessor(
             extractor=DefaultTextExtractor(),
-            chunker=HeaderSlidingChunker()
+            chunker=DefaultChunker()
         )
 
     def extract(self, override_callback=None, settings_override: dict = None):
