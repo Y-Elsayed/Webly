@@ -9,7 +9,7 @@ class QueryPipeline:
         self.recrawl_fn = recrawl_fn
         # self.max_context_chars = 12000  # Plenty for GPT-4o mini
 
-    def query(self, question: str, retry_on_empty: bool = True) -> str:
+    def query(self, question: str, retry_on_empty: bool = False) -> str:
         query_embedding = self.chat_agent.embedder.embed(question)
 
         results = self.chat_agent.vector_db.search(
