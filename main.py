@@ -1,11 +1,12 @@
 # main.py
 import os
 import sys
-from dotenv import load_dotenv, find_dotenv
+from dotenv import load_dotenv
 
 sys.path.append(os.path.abspath("webcreeper"))
 
 from embedder.hf_sentence_embedder import HFSentenceEmbedder
+from embedder.openai_embedder import OpenAIEmbedder  # <-- new embedder
 from chatbot.chatgpt_model import ChatGPTModel
 from chatbot.webly_chat_agent import WeblyChatAgent
 from pipeline.query_pipeline import QueryPipeline
@@ -15,31 +16,13 @@ from vector_index.faiss_db import FaissDatabase
 from crawl.crawler import Crawler
 
 
-def _maybe_load_env():
-    env_path = find_dotenv(usecwd=True)
-    if env_path:
-        load_dotenv(env_path, override=False)
-
-
-def _maybe_load_index(db: FaissDatabase, index_dir: str):
-    emb_path = os.path.join(index_dir, "embeddings.index")
-    meta_path = os.path.join(index_dir, "metadata.meta")
-    if os.path.exists(emb_path) and os.path.exists(meta_path):
-        db.load(index_dir)
-
-
 def build_pipelines(config):
-    _maybe_load_env()
-
-    API_KEY = (
-        os.getenv("OPENAI_API_KEY")
-        or config.get("OPENAI_API_KEY")
-        or config.get("openai_api_key")
-    )
+    load_dotenv()
+    API_KEY = os.getenv("OPENAI_API_KEY")
     if not API_KEY:
         raise RuntimeError("Missing OPENAI_API_KEY")
 
-    # Normalize defaults
+    # ---- normalize defaults ----
     emb = (config.get("embedding_model") or "").strip()
     if emb.lower() in ("", "default"):
         emb = "sentence-transformers/all-MiniLM-L6-v2"
@@ -50,14 +33,14 @@ def build_pipelines(config):
         chat = "gpt-4o-mini"
         config["chat_model"] = chat
 
-    # Components
-    embedder = HFSentenceEmbedder(config["embedding_model"])
-    db = FaissDatabase()
-    # 👇 auto-load existing index if present
-    os.makedirs(config["index_dir"], exist_ok=True)
-    _maybe_load_index(db, config["index_dir"])
+    # ---- embedder auto-detect ----
+    if emb.startswith("openai:"):
+        embedder = OpenAIEmbedder(model_name=emb.split(":", 1)[1], api_key=API_KEY)
+    else:
+        embedder = HFSentenceEmbedder(emb)
 
-    chatbot = ChatGPTModel(api_key=API_KEY, model=config["chat_model"])
+    db = FaissDatabase()
+    chatbot = ChatGPTModel(api_key=API_KEY, model=config.get("chat_model", "gpt-4o-mini"))
 
     summarizer = None
     if config.get("summary_model"):
