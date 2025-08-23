@@ -58,6 +58,15 @@ class IngestPipeline:
         self.db.create(dim=self.embedder.dim)
         transformed_records = []
 
+        # --- Load site graph once ---
+        graph_path = os.path.join(self.crawler.output_dir, "graph.json")
+        if os.path.exists(graph_path):
+            with open(graph_path, "r", encoding="utf-8") as gf:
+                site_graph = json.load(gf)
+        else:
+            print(f"[IngestPipeline] No graph.json found at {graph_path}, continuing without link metadata.")
+            site_graph = {}
+
         summary_debug_file = open(self.debug_summary_path, "w", encoding="utf-8") if self.debug else None
         chunk_debug_file = open(self.debug_chunks_path, "w", encoding="utf-8") if self.debug else None
 
@@ -105,6 +114,30 @@ class IngestPipeline:
 
                         chunk["embedding"] = embedding
 
+                        # --- Enrich with graph metadata ---
+                        chunk_id = f"{url}#chunk_{chunk.get('chunk_index', -1)}"
+
+                        # Outgoing links from this page
+                        outgoing_links = site_graph.get(url, [])
+
+                        # Incoming links pointing to this page
+                        incoming_links = []
+                        for from_page, links in site_graph.items():
+                            for link in links:
+                                if link.get("target") == url:
+                                    incoming_links.append({
+                                        "from_page": from_page,
+                                        "anchor_text": link.get("anchor_text", ""),
+                                        "source_chunk": link.get("source_chunk")
+                                    })
+
+                        chunk["metadata"] = {
+                            "chunk_id": chunk_id,
+                            "page_url": url,
+                            "outgoing_links": outgoing_links,
+                            "incoming_links": incoming_links
+                        }
+
                         if self.debug and summary_debug_file:
                             json.dump({
                                 "url": chunk.get("url", "N/A"),
@@ -128,6 +161,7 @@ class IngestPipeline:
             print(f"[IngestPipeline] Wrote raw chunks to {self.debug_chunks_path}")
 
         return transformed_records
+
 
     def load(self, records: List[dict]):
         for record in records:
