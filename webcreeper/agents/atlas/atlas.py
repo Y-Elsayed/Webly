@@ -120,16 +120,18 @@ class Atlas(BaseAgent):
                 if link.startswith(domain) and link not in to_visit:
                     to_visit.append(link)
 
-    def extract_links(self, page_content: str, base_url: str) -> list:
-        soup = BeautifulSoup(page_content, 'html.parser')
-        links = set()
+            def extract_links(self, page_content: str, base_url: str, page_id=None) -> list:
+                soup = BeautifulSoup(page_content, 'html.parser')
+                links = []
+                for i, anchor in enumerate(soup.find_all('a', href=True)):
+                    full_url = urljoin(base_url, anchor['href'])
+                    links.append({
+                        "target": full_url,
+                        "anchor_text": anchor.get_text(strip=True),
+                        "source_chunk": f"{page_id}_chunk_{i}"
+                    })
+                return links
 
-        for anchor in soup.find_all('a', href=True):
-            full_url = urljoin(base_url, anchor['href'])
-            if self.should_visit(full_url) and self.is_allowed_path(full_url):
-                links.add(full_url)
-
-        return list(links)
 
     def is_allowed_path(self, url: str) -> bool:
         path = urlparse(url).path
