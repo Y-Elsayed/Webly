@@ -2,7 +2,7 @@ import os
 import json
 from typing import List, Dict, Any
 from embedder.base_embedder import Embedder
-from storage.vector_db import VectorDatabase
+from vector_index.vector_db import VectorDatabase
 
 
 class EmbedAndStorePipeline:
