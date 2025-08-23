@@ -7,19 +7,15 @@ import re
 class BaseAgent(ABC):
 
     def __init__(self, settings: dict = {}):
-        self.settings = {**self.DEFAULT_SETTINGS, **settings}
-        self.logger = configure_logging(self.__class__.__name__)
-        self.robots_cache = {}
-        self.blacklist = set()
-        self.visited = set()
-        # Compile user-defined skip patterns (as regex)
-        self.skip_url_patterns = [
-            re.compile(p) for p in self.settings.get("skip_url_patterns", [])
-        ]
-        # white list system (the urls to visit)
-        self.allow_url_patterns = [
-            re.compile(p) for p in self.settings.get("allow_url_patterns", [])
-        ]
+            self.settings = {**self.DEFAULT_SETTINGS, **settings}
+            self.logger = configure_logging(self.__class__.__name__)
+            self.robots_cache = {}
+            self.blacklist = set()
+            self.visited = set()
+            self.disallowed_reasons = {}   # NEW: url → reason(s)
+
+            self.skip_url_patterns = [re.compile(p) for p in self.settings.get("skip_url_patterns", [])]
+            self.allow_url_patterns = [re.compile(p) for p in self.settings.get("allow_url_patterns", [])]
 
     @abstractmethod
     def crawl(self):
@@ -151,32 +147,38 @@ class BaseAgent(ABC):
 
     def should_visit(self, url: str) -> bool:
         if url in self.visited:
-            self.logger.info(f"Already visited: {url}")
+            self._mark_disallowed(url, "Already visited")
             return False
 
         if url in self.blacklist:
-            self.logger.info(f"Blacklisted URL: {url}")
+            self._mark_disallowed(url, "Blacklisted URL")
             return False
 
         if not self.is_allowed_domain(url):
-            self.logger.info(f"Disallowed domain: {url}")
+            self._mark_disallowed(url, "Disallowed domain")
             return False
 
         if not self.is_allowed_by_robots(url):
-            self.logger.info(f"Blocked by robots.txt: {url}")
+            self._mark_disallowed(url, "Blocked by robots.txt")
             return False
 
         if self.should_skip_url(url):
-            self.logger.info(f"Filtered by skip rules: {url}")
+            self._mark_disallowed(url, "Filtered by skip rules")
             return False
-        
+
         if not self.is_allowed_by_patterns(url):
+            self._mark_disallowed(url, "Not matched by allow patterns")
             return False
 
         return True
 
-    def add_to_blacklist(self, urls: list[str] | str):
-        if isinstance(urls, str):
-            urls = [urls]
-        self.blacklist.update(urls)
-        self.logger.info(f"Added to blacklist: {urls}")
+    # --- helper
+    def _mark_disallowed(self, url: str, reason: str):
+        self.logger.info(f"Disallowed {url} -> {reason}")
+        if url not in self.disallowed_reasons:
+            self.disallowed_reasons[url] = []
+        self.disallowed_reasons[url].append(reason)
+
+    def get_disallowed_report(self) -> dict:
+        """Return a mapping of url -> reasons why it was disallowed"""
+        return self.disallowed_reasons

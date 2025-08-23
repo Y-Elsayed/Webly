@@ -1,10 +1,9 @@
+# main.py
 import os
 import sys
-import json
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
-# ─── Setup and Imports ──────────────────────────────────────────────────────────
-sys.path.append(os.path.abspath("webcreeper"))  # Temporary patch until proper install
+sys.path.append(os.path.abspath("webcreeper"))
 
 from embedder.hf_sentence_embedder import HFSentenceEmbedder
 from chatbot.chatgpt_model import ChatGPTModel
@@ -12,86 +11,81 @@ from chatbot.webly_chat_agent import WeblyChatAgent
 from pipeline.query_pipeline import QueryPipeline
 from pipeline.ingest_pipeline import IngestPipeline
 from processors.text_summarizer import TextSummarizer
-from storage.faiss_db import FaissDatabase
+from vector_index.faiss_db import FaissDatabase
 from crawl.crawler import Crawler
 
-# ─── Load Configuration ─────────────────────────────────────────────────────────
-with open("config.json", "r") as f:
-    config = json.load(f)
 
-START_URL = config["start_url"]
-ALLOWED_DOMAINS = config["allowed_domains"]
-OUTPUT_DIR = config["output_dir"]
-INDEX_DIR = config["index_dir"]
-RESULTS_PATH = os.path.join(OUTPUT_DIR, config["results_file"])
-EMBEDDING_MODEL = config["embedding_model"]
-SCORE_THRESHOLD = config.get("score_threshold", 0.6)
-CHAT_MODEL = config.get("chat_model", "gpt-4o-mini")
-SUMMARY_MODEL = config.get("summary_model", "gpt-4o-mini")
+def _maybe_load_env():
+    env_path = find_dotenv(usecwd=True)
+    if env_path:
+        load_dotenv(env_path, override=False)
 
-# ─── Load Environment Variables ────────────────────────────────────────────────
-load_dotenv()
-API_KEY = os.getenv("OPENAI_API_KEY")
-if not API_KEY:
-    raise RuntimeError("Missing OPENAI_API_KEY in .env or environment variables.")
 
-# ─── Initialize Core Components ────────────────────────────────────────────────
-embedder = HFSentenceEmbedder(EMBEDDING_MODEL)
-db = FaissDatabase()
-chatbot = ChatGPTModel(api_key=API_KEY, model=CHAT_MODEL)
-summary_llm = ChatGPTModel(api_key=API_KEY, model=SUMMARY_MODEL)
+def _maybe_load_index(db: FaissDatabase, index_dir: str):
+    emb_path = os.path.join(index_dir, "embeddings.index")
+    meta_path = os.path.join(index_dir, "metadata.meta")
+    if os.path.exists(emb_path) and os.path.exists(meta_path):
+        db.load(index_dir)
 
-# ─── Set Up Summarizer ─────────────────────────────────────────────────────────
-SUMMARY_PROMPT = (
-    "You are a documentation assistant. Summarize the following webpage content clearly and concisely.\n"
-    "Focus on the main purpose and key information relevant to a reader skimming the content:\n\n{text}"
-)
-summarizer = TextSummarizer(llm=summary_llm, prompt_template=SUMMARY_PROMPT)
 
-# ─── Set Up Crawler ────────────────────────────────────────────────────────────
-crawler = Crawler(
-    start_url=START_URL,
-    allowed_domains=ALLOWED_DOMAINS,
-    output_dir=OUTPUT_DIR,
-    results_filename=config["results_file"],
-    default_settings={
-        "crawl_entire_website": True
-    }
-)
+def build_pipelines(config):
+    _maybe_load_env()
 
-# ─── Ingest Pipeline: Crawl → Summarize → Embed → Store ────────────────────────
-ingest_pipeline = IngestPipeline(
-    crawler=crawler,
-    index_path=INDEX_DIR,
-    embedder=embedder,
-    db=db,
-    summarizer=summarizer,
-    use_summary=False,
-    debug=True
-)
+    API_KEY = (
+        os.getenv("OPENAI_API_KEY")
+        or config.get("OPENAI_API_KEY")
+        or config.get("openai_api_key")
+    )
+    if not API_KEY:
+        raise RuntimeError("Missing OPENAI_API_KEY")
 
-try:
-    if not os.path.exists(os.path.join(INDEX_DIR, "embeddings.index")):
-        print("[Webly] Crawling and indexing site...")
-        ingest_pipeline.run()
-        print("[Webly] Indexing complete.")
-    else:
-        db.load(INDEX_DIR)
-except Exception as e:
-    print(f"[Webly] Failed to initialize index: {e}")
-    sys.exit(1)
+    # Normalize defaults
+    emb = (config.get("embedding_model") or "").strip()
+    if emb.lower() in ("", "default"):
+        emb = "sentence-transformers/all-MiniLM-L6-v2"
+        config["embedding_model"] = emb
 
-# ─── Query Pipeline: Embed → Retrieve → Answer ─────────────────────────────────
-agent = WeblyChatAgent(embedder, db, chatbot)
-query_pipeline = QueryPipeline(chat_agent=agent)
+    chat = (config.get("chat_model") or "").strip()
+    if chat.lower() in ("", "default"):
+        chat = "gpt-4o-mini"
+        config["chat_model"] = chat
 
-# ─── CLI Loop ───────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    print("\n[Webly] Ready.\nAsk a question (press enter to quit):\n")
-    while True:
-        question = input("You: ").strip()
-        if not question:
-            print("Goodbye!")
-            break
-        answer = query_pipeline.query(question)
-        print(f"\nWebly: {answer}\n")
+    # Components
+    embedder = HFSentenceEmbedder(config["embedding_model"])
+    db = FaissDatabase()
+    # 👇 auto-load existing index if present
+    os.makedirs(config["index_dir"], exist_ok=True)
+    _maybe_load_index(db, config["index_dir"])
+
+    chatbot = ChatGPTModel(api_key=API_KEY, model=config["chat_model"])
+
+    summarizer = None
+    if config.get("summary_model"):
+        summary_llm = ChatGPTModel(api_key=API_KEY, model=config["summary_model"])
+        summarizer = TextSummarizer(
+            llm=summary_llm,
+            prompt_template="Summarize the following webpage clearly:\n\n{text}",
+        )
+
+    crawler = Crawler(
+        start_url=config["start_url"],
+        allowed_domains=config["allowed_domains"],
+        output_dir=config["output_dir"],
+        results_filename=config["results_file"],
+        default_settings={"crawl_entire_website": config.get("crawl_entire_site", True)},
+    )
+
+    ingest_pipeline = IngestPipeline(
+        crawler=crawler,
+        index_path=config["index_dir"],
+        embedder=embedder,
+        db=db,
+        summarizer=summarizer,
+        use_summary=bool(summarizer),
+        debug=True,
+    )
+
+    agent = WeblyChatAgent(embedder, db, chatbot)
+    query_pipeline = QueryPipeline(chat_agent=agent)
+
+    return ingest_pipeline, query_pipeline

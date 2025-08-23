@@ -3,7 +3,7 @@ import json
 from typing import Optional, List
 from crawl.crawler import Crawler
 from embedder.base_embedder import Embedder
-from storage.vector_db import VectorDatabase
+from vector_index.vector_db import VectorDatabase
 from processors.text_summarizer import TextSummarizer
 from processors.page_processor import SemanticPageProcessor
 from processors.text_chunkers import DefaultChunker
