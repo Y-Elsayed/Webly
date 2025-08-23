@@ -30,19 +30,25 @@ class SemanticPageProcessor:
         self.chunker = chunker
 
     def process(self, url: str, html: str) -> List[dict]:
-        extracted = self.extractor(url, html)
-        text = extracted.get("text")
-        if not text:
-            return []
-
+        """
+        IMPORTANT: pass the raw HTML to the chunker so we can keep structure (headings/anchors).
+        The extractor can still be used for other signals if needed.
+        """
+        extracted = self.extractor(url, html)  # you can still use extracted["text"] if you want
+        # Use raw HTML here to preserve headings/anchors
+        chunks = self.chunker.chunk_html(html, url)
         return [
             {
                 "url": url,
                 "chunk_index": i,
-                "text": chunk["text"] if isinstance(chunk, dict) else chunk,
-                "length": len(chunk["text"].split()) if isinstance(chunk, dict) else len(chunk.split())
+                "text": ch["text"],
+                "length": ch.get("tokens", len(ch["text"].split())),
+                # carry structural metadata forward
+                "hierarchy": ch.get("hierarchy", []),
+                "outgoing_links": ch.get("outgoing_links", []),
+                "id": ch.get("id")  # deterministic id for graph joins
             }
-            for i, chunk in enumerate(self.chunker.chunk_html(text, url))
+            for i, ch in enumerate(chunks)
         ]
 
 

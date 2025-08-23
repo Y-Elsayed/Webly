@@ -2,7 +2,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 from creeper_core.base_agent import BaseAgent
 from creeper_core.storage import save_jsonl_line, save_json
-import os
+import os, hashlib
 
 class Atlas(BaseAgent):
     DEFAULT_SETTINGS = {
@@ -12,7 +12,7 @@ class Atlas(BaseAgent):
         "max_depth": 3,
         "allowed_domains": [],
         "allowed_paths": [],
-        "allow_url_patterns" : [],
+        "allow_url_patterns": [],
         "blocked_paths": [],
         "storage_path": "./data",
         "crawl_entire_website": False,
@@ -20,22 +20,44 @@ class Atlas(BaseAgent):
         "results_filename": "results.jsonl",
         "heuristic_skip_long_urls": True,
         "heuristic_skip_state_param": True,
-        
+        "deduplicate_content": True,   # NEW: enable dedup by default
     }
 
     def __init__(self, settings: dict = {}):
         self.settings = {**self.DEFAULT_SETTINGS, **settings}
         self.graph = {}
-        self.max_depth = self.settings['max_depth']
-        self.crawl_entire_website = self.settings['crawl_entire_website']
+        self.max_depth = self.settings["max_depth"]
+        self.crawl_entire_website = self.settings["crawl_entire_website"]
 
         self.results_path = os.path.join(
-            self.settings['storage_path'], self.settings['results_filename']
+            self.settings["storage_path"], self.settings["results_filename"]
         )
-        os.makedirs(self.settings['storage_path'], exist_ok=True)
+        os.makedirs(self.settings["storage_path"], exist_ok=True)
+
+        # Track seen content hashes
+        self.content_hashes = set()
 
         super().__init__(self.settings)
 
+    # --- helpers ---
+    def _is_duplicate_content(self, html: str, url: str) -> bool:
+        """Check if content is duplicate based on hash of extracted text."""
+        if not self.settings.get("deduplicate_content", True):
+            return False
+
+        text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
+        if not text:
+            return False
+
+        h = hashlib.md5(text.encode("utf-8")).hexdigest()
+        if h in self.content_hashes:
+            self.logger.info(f"Skipping {url} (duplicate content hash)")
+            return True
+
+        self.content_hashes.add(h)
+        return False
+
+    # --- main crawling ---
     def crawl(self, start_url: str, on_page_crawled=None, on_all_done=None):
         self.on_page_crawled = on_page_crawled
         self.on_all_done = on_all_done
@@ -71,6 +93,10 @@ class Atlas(BaseAgent):
             self.logger.info(f"Skipping non-HTML content: {url} [{content_type}]")
             return
 
+        # Deduplication step
+        if self._is_duplicate_content(content, url):
+            return
+
         links = self.extract_links(content, url)
         if self.on_page_crawled:
             result = self.on_page_crawled(url, content)
@@ -79,11 +105,10 @@ class Atlas(BaseAgent):
                 result = {}
             self._save_result(result)
 
-
         self.graph[url] = links
 
         for link in links:
-            self._crawl_page(link, depth + 1)
+            self._crawl_page(link["target"], depth + 1)
 
     def _crawl_entire_site(self, start_url: str):
         domain = self.get_home_url(start_url)
@@ -105,6 +130,10 @@ class Atlas(BaseAgent):
                 self.logger.info(f"Skipping non-HTML content: {url} [{content_type}]")
                 continue
 
+            # Deduplication step
+            if self._is_duplicate_content(content, url):
+                continue
+
             links = self.extract_links(content, url)
             if self.on_page_crawled:
                 result = self.on_page_crawled(url, content)
@@ -113,25 +142,24 @@ class Atlas(BaseAgent):
                     result = {}
                 self._save_result(result)
 
-
             self.graph[url] = links
 
             for link in links:
-                if link.startswith(domain) and link not in to_visit:
-                    to_visit.append(link)
+                target = link["target"]
+                if target.startswith(domain) and target not in to_visit:
+                    to_visit.append(target)
 
-            def extract_links(self, page_content: str, base_url: str, page_id=None) -> list:
-                soup = BeautifulSoup(page_content, 'html.parser')
-                links = []
-                for i, anchor in enumerate(soup.find_all('a', href=True)):
-                    full_url = urljoin(base_url, anchor['href'])
-                    links.append({
-                        "target": full_url,
-                        "anchor_text": anchor.get_text(strip=True),
-                        "source_chunk": f"{page_id}_chunk_{i}"
-                    })
-                return links
-
+    def extract_links(self, page_content: str, base_url: str, page_id=None) -> list:
+        soup = BeautifulSoup(page_content, "html.parser")
+        links = []
+        for i, anchor in enumerate(soup.find_all("a", href=True)):
+            full_url = urljoin(base_url, anchor["href"])
+            links.append({
+                "target": full_url,
+                "anchor_text": anchor.get_text(strip=True),
+                "source_chunk": f"{page_id}_chunk_{i}"
+            })
+        return links
 
     def is_allowed_path(self, url: str) -> bool:
         path = urlparse(url).path
@@ -153,12 +181,9 @@ class Atlas(BaseAgent):
         if self.settings["save_results"]:
             save_jsonl_line(self.results_path, result)
 
-
-
-
     def process_data(self, data, file_path=None):
         if file_path is None:
-            file_path = os.path.join(self.settings['storage_path'], 'graph.json')
+            file_path = os.path.join(self.settings["storage_path"], "graph.json")
         save_json(file_path, data)
 
     def get_graph(self):

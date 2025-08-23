@@ -1,6 +1,7 @@
 import string
 from chatbot.base_chatbot import Chatbot
 
+
 class WeblyChatAgent:
     def __init__(
         self,
@@ -9,7 +10,7 @@ class WeblyChatAgent:
         chatbot: Chatbot,
         top_k=5,
         prompt_template=None,
-        system_prompt: str = None 
+        system_prompt: str = None
     ):
         self.embedder = embedder
         self.vector_db = vector_db
@@ -31,8 +32,6 @@ class WeblyChatAgent:
 
         Avoid saying “the website says” or “according to the site” unless it's essential for clarity. Speak as the website itself.
         """
-
-
         self.system_prompt = system_prompt or default_system_prompt
 
         default_prompt = (
@@ -41,14 +40,12 @@ class WeblyChatAgent:
         )
         self.prompt_template = prompt_template or default_prompt
 
-        # Ensure required placeholders exist in the prompt template
         required_fields = {"context", "question"}
         found_fields = {
             field_name
             for _, field_name, _, _ in string.Formatter().parse(self.prompt_template)
             if field_name
         }
-
         missing = required_fields - found_fields
         if missing:
             raise ValueError(f"Prompt template is missing required placeholders: {', '.join(missing)}")
@@ -60,11 +57,32 @@ class WeblyChatAgent:
 
         prompt = self.prompt_template.format(context=context, question=question)
         full_prompt = f"{self.system_prompt.strip()}\n\n{prompt.strip()}"
-        print(full_prompt)
+        # print(full_prompt)  # keep disabled in production
 
         response = self.chatbot.generate(full_prompt).strip()
-
         if response == "N":
             return "I'm sorry, I couldn't find any relevant information to answer that question."
-
         return response
+
+    # === NEW: lightweight query rewriter ===
+    def rewrite_query(self, question: str, hints: list[str], max_chars: int = 300) -> str | None:
+        """
+        Ask the LLM for a surgical rewrite of the query to improve retrieval.
+        Returns None if no rewrite is needed.
+        - hints: short strings like top headings, anchor texts, or page titles.
+        """
+        hints_text = "; ".join(hints[:8])[:1000]
+        prompt = (
+            "You help reformulate search queries to retrieve the most relevant website chunks.\n"
+            "Original query:\n"
+            f"{question.strip()}\n\n"
+            "Context hints (headings/anchors):\n"
+            f"{hints_text}\n\n"
+            "Rewrite the query to be clearer and more specific for retrieval.\n"
+            "If the original is already optimal, answer exactly: SAME\n"
+            f"Limit to {max_chars} characters. Output only the query text or SAME."
+        )
+        rewritten = self.chatbot.generate(prompt).strip()
+        if not rewritten or rewritten.upper() == "SAME":
+            return None
+        return rewritten
