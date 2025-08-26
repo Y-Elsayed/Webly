@@ -50,7 +50,8 @@ class IngestPipeline:
         print("[IngestPipeline] Crawling site...")
         self.crawler.crawl(
             on_page_crawled=override_callback,
-            settings_override=settings_override
+            settings_override=settings_override,
+            save_sitemap=True
         )
 
     def transform(self) -> List[dict]:
