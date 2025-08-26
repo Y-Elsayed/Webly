@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 sys.path.append(os.path.abspath("webcreeper"))
 
 from embedder.hf_sentence_embedder import HFSentenceEmbedder
-from embedder.openai_embedder import OpenAIEmbedder  # <-- new embedder
+from embedder.openai_embedder import OpenAIEmbedder
 from chatbot.chatgpt_model import ChatGPTModel
 from chatbot.webly_chat_agent import WeblyChatAgent
 from pipeline.query_pipeline import QueryPipeline
@@ -14,6 +14,18 @@ from pipeline.ingest_pipeline import IngestPipeline
 from processors.text_summarizer import TextSummarizer
 from vector_index.faiss_db import FaissDatabase
 from crawl.crawler import Crawler
+
+
+def _index_dir_ready(index_dir: str) -> bool:
+    if not index_dir or not os.path.isdir(index_dir):
+        return False
+    try:
+        files = os.listdir(index_dir)
+    except Exception:
+        return False
+    has_index = any(f.lower().endswith(".index") for f in files)
+    has_meta  = any(f.lower().startswith("metadata") for f in files)
+    return has_index and has_meta
 
 
 def build_pipelines(config):
@@ -39,7 +51,14 @@ def build_pipelines(config):
     else:
         embedder = HFSentenceEmbedder(emb)
 
-    db = FaissDatabase()
+    # ---- database: eager-load if index exists on disk ----
+    index_dir = config.get("index_dir")
+    if _index_dir_ready(index_dir):
+        # Will call .load(index_dir) in ctor
+        db = FaissDatabase(index_dir)
+    else:
+        db = FaissDatabase()  # fresh; ingest will create/save
+
     chatbot = ChatGPTModel(api_key=API_KEY, model=config.get("chat_model", "gpt-4o-mini"))
 
     summarizer = None
@@ -60,7 +79,7 @@ def build_pipelines(config):
 
     ingest_pipeline = IngestPipeline(
         crawler=crawler,
-        index_path=config["index_dir"],
+        index_path=config["index_dir"],  # where FaissDatabase.save/load should read/write
         embedder=embedder,
         db=db,
         summarizer=summarizer,
