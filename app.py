@@ -383,44 +383,148 @@ with st.sidebar:
                     st.success("Settings saved ✅")
 
             with col2:
-                # Primary action: reveal inline options + start
-                if st.button("🚀 Run"):
-                    st.session_state.show_force_options = not st.session_state.get("show_force_options", False)
-                    st.session_state.last_index_ok = None
-                    st.session_state.last_index_msg = ""
+                if st.button("🚀 Run", key=f"run_toggle_{selected}"):
+                        st.session_state.show_force_options = True
+                        st.session_state.last_index_ok = None
+                        st.session_state.last_index_msg = ""
 
-                # Inline options directly underneath the button
-                if st.session_state.get("show_force_options", False):
-                    action = st.radio(
-                        "Action",
-                        ["Crawl + Index", "Crawl only", "Index only"],
-                        index=0,
-                        key=f"action_{selected}"
+                # # Show options only when the panel is open
+                # if st.session_state.get("show_force_options", False):
+                #     st.markdown("**Select what to run**")
+                #     action = st.radio(
+                #         "Action",
+                #         ["Crawl + Index", "Crawl only", "Index only"],
+                #         index=0,
+                #         key=f"action_{selected}",
+                #     )
+                #     mode_map = {
+                #         "Crawl + Index": "both",
+                #         "Crawl only": "crawl_only",
+                #         "Index only": "index_only",
+                #     }
+                #     mode_val = mode_map[action]
+
+                #     # Force toggle appears only when we crawl
+                #     if mode_val in ("both", "crawl_only"):
+                #         force_crawl = st.checkbox(
+                #             "Force re-crawl (ignore existing results.jsonl)",
+                #             value=False,
+                #             key=f"force_{selected}",
+                #         )
+                #     else:
+                #         force_crawl = False
+
+                #     # Start / Cancel controls
+                #     c1, c2 = st.columns([1, 1])
+                #     with c1:
+                #         start_clicked = st.button("Start", key=f"start_{selected}")
+                #     with c2:
+                #         if st.button("Cancel", key=f"cancel_run_{selected}"):
+                #             st.session_state.show_force_options = False
+                #             st.stop()
+
+                #     # 🚦 Only run when Start is pressed
+                #     if start_clicked:
+                #         rebuild_pipelines_for_project(manager, selected)
+                #         with st.spinner(f"Running: {action} for {selected}..."):
+                #             try:
+                #                 result = st.session_state.ingest_pipeline.run(
+                #                     force_crawl=force_crawl,
+                #                     mode=mode_val
+                #                 )
+
+                #                 # Handled empty-results status from the pipeline
+                #                 if isinstance(result, dict) and result.get("empty_results"):
+                #                     st.info(
+                #                         "No pages were saved for this run.\n\n"
+                #                         f"Checked path: `{result.get('results_path') or 'N/A'}`\n\n"
+                #                         "Possible causes:\n"
+                #                         "- Start URL not within **Allowed Domains**\n"
+                #                         "- Subdomains blocked (enable **Allow subdomains**)\n"
+                #                         "- Patterns/seed URLs too strict\n"
+                #                         "- robots/anti-bot or login wall blocked pages\n"
+                #                         "- JS-only pages (need a renderer)\n\n"
+                #                         + (result.get("message") or "")
+                #                     )
+                #                     if result.get("disallowed_report_path"):
+                #                         st.caption(f"Debug report saved to: {result['disallowed_report_path']}")
+                #                     st.stop()
+
+                #                 # Normal success paths
+                #                 if mode_val in ("both", "index_only"):
+                #                     cfg_after = load_project_config(manager, selected)
+                #                     ok = _index_dir_ready(cfg_after["index_dir"])
+                #                     st.session_state.last_index_ok = ok
+                #                     if ok:
+                #                         st.session_state.last_index_msg = f"Index ready ✓  ({cfg_after['index_dir']})"
+                #                         rebuild_pipelines_for_project(manager, selected)
+                #                         st.success(st.session_state.last_index_msg)
+                #                     else:
+                #                         st.session_state.last_index_msg = (
+                #                             f"Index phase finished, but files not found in:\n{cfg_after['index_dir']}\n"
+                #                             "Ensure your ingest pipeline writes an '.index' and 'metadata.*'."
+                #                         )
+                #                         st.error(st.session_state.last_index_msg)
+
+                #                 elif mode_val == "crawl_only":
+                #                     if _results_file_ready(cfg["output_dir"], cfg["results_file"]):
+                #                         st.success("Crawl complete ✓  (results.jsonl ready)")
+                #                     else:
+                #                         st.info("Crawl finished, but the results file is missing or empty.")
+
+                #             finally:
+                #                 # Always close the panel after an attempt
+                #                 st.session_state.show_force_options = False
+
+
+            with col3:
+                if st.button("🗑️ Delete Project"):
+                    st.session_state.confirm_delete = selected
+        # === Run Panel (rendered outside columns to avoid nested-columns error) ===
+            if st.session_state.get("show_force_options", False):
+                st.divider()
+                st.markdown("### ▶️ Run pipeline")
+
+                action = st.radio(
+                    "Action",
+                    ["Crawl + Index", "Crawl only", "Index only"],
+                    index=0,
+                    key=f"action_{selected}",
+                )
+                mode_map = {
+                    "Crawl + Index": "both",
+                    "Crawl only": "crawl_only",
+                    "Index only": "index_only",
+                }
+                mode_val = mode_map[action]
+
+                # Force only when crawling
+                force_crawl = False
+                if mode_val in ("both", "crawl_only"):
+                    force_crawl = st.checkbox(
+                        "Force re-crawl (ignore existing results.jsonl)",
+                        value=False,
+                        key=f"force_{selected}",
                     )
-                    mode_map = {
-                        "Crawl + Index": "both",
-                        "Crawl only": "crawl_only",
-                        "Index only": "index_only",
-                    }
-                    mode_val = mode_map[action]
 
-                    # Force only applies when we crawl
-                    force_crawl = False
-                    if mode_val in ("both", "crawl_only"):
-                        force_crawl = st.checkbox(
-                            "Force re-crawl (ignore existing results.jsonl)",
-                            value=False,
-                            key=f"force_{selected}"
-                        )
+                # Start / Cancel side-by-side (now safe, not inside a column)
+                c_start, c_cancel = st.columns([1, 1])
+                with c_start:
+                    start_clicked = st.button("Start", key=f"start_{selected}")
+                with c_cancel:
+                    cancel_clicked = st.button("Cancel", key=f"cancel_run_{selected}")
 
-                    if st.button("Start", key=f"start_{selected}"):
-                        # Ensure pipelines for current project
-                        rebuild_pipelines_for_project(manager, selected)
+                if cancel_clicked:
+                    st.session_state.show_force_options = False
+                    st.stop()
+
+                # 🚦 Only runs when Start is pressed
+                if start_clicked:
+                    rebuild_pipelines_for_project(manager, selected)
                     with st.spinner(f"Running: {action} for {selected}..."):
                         try:
                             result = st.session_state.ingest_pipeline.run(
-                                force_crawl=force_crawl,
-                                mode=mode_val
+                                force_crawl=force_crawl, mode=mode_val
                             )
 
                             # Handled empty-results status from the pipeline
@@ -434,10 +538,11 @@ with st.sidebar:
                                     "- Patterns/seed URLs too strict\n"
                                     "- robots/anti-bot or login wall blocked pages\n"
                                     "- JS-only pages (need a renderer)\n\n"
-                                    + (result.get("message") or "")
+                                    + (result.get('message') or "")
                                 )
                                 if result.get("disallowed_report_path"):
                                     st.caption(f"Debug report saved to: {result['disallowed_report_path']}")
+                                st.session_state.show_force_options = False
                                 st.stop()
 
                             # Normal success paths
@@ -456,20 +561,16 @@ with st.sidebar:
                                     )
                                     st.error(st.session_state.last_index_msg)
 
-                            elif mode_val == "crawl_only":
+                            else:  # crawl_only
+                                # use the existing cfg from this expander scope
                                 if _results_file_ready(cfg["output_dir"], cfg["results_file"]):
                                     st.success("Crawl complete ✓  (results.jsonl ready)")
                                 else:
                                     st.info("Crawl finished, but the results file is missing or empty.")
 
                         finally:
-                            # Hide options after attempt (also runs after st.stop())
+                            # Close panel after attempt
                             st.session_state.show_force_options = False
-
-
-            with col3:
-                if st.button("🗑️ Delete Project"):
-                    st.session_state.confirm_delete = selected
 
         # Delete confirmation UI
         if st.session_state.get("confirm_delete") == selected:
