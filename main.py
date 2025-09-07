@@ -1,8 +1,8 @@
-# main.py
 import os
 import sys
 from dotenv import load_dotenv
 
+# keep your existing path setup (if needed)
 sys.path.append(os.path.abspath("webcreeper"))
 
 from embedder.hf_sentence_embedder import HFSentenceEmbedder
@@ -14,18 +14,6 @@ from pipeline.ingest_pipeline import IngestPipeline
 from processors.text_summarizer import TextSummarizer
 from vector_index.faiss_db import FaissDatabase
 from crawl.crawler import Crawler
-
-
-def _index_dir_ready(index_dir: str) -> bool:
-    if not index_dir or not os.path.isdir(index_dir):
-        return False
-    try:
-        files = os.listdir(index_dir)
-    except Exception:
-        return False
-    has_index = any(f.lower().endswith(".index") for f in files)
-    has_meta  = any(f.lower().startswith("metadata") for f in files)
-    return has_index and has_meta
 
 
 def build_pipelines(config):
@@ -51,14 +39,7 @@ def build_pipelines(config):
     else:
         embedder = HFSentenceEmbedder(emb)
 
-    # ---- database: eager-load if index exists on disk ----
-    index_dir = config.get("index_dir")
-    if _index_dir_ready(index_dir):
-        # Will call .load(index_dir) in ctor
-        db = FaissDatabase(index_dir)
-    else:
-        db = FaissDatabase()  # fresh; ingest will create/save
-
+    db = FaissDatabase()
     chatbot = ChatGPTModel(api_key=API_KEY, model=config.get("chat_model", "gpt-4o-mini"))
 
     summarizer = None
@@ -71,15 +52,26 @@ def build_pipelines(config):
 
     crawler = Crawler(
         start_url=config["start_url"],
-        allowed_domains=config["allowed_domains"],
+        allowed_domains=config.get("allowed_domains", []),
         output_dir=config["output_dir"],
-        results_filename=config["results_file"],
-        default_settings={"crawl_entire_website": config.get("crawl_entire_site", True)},
+        results_filename=config.get("results_file", "results.jsonl"),
+        default_settings={
+            "crawl_entire_website": config.get("crawl_entire_site", True),
+            "max_depth": int(config.get("max_depth", 3)),
+            "allowed_paths": config.get("allowed_paths", []),
+            "blocked_paths": config.get("blocked_paths", []),
+            "allow_url_patterns": config.get("allow_url_patterns", []),
+            "block_url_patterns": config.get("block_url_patterns", []),
+            "allow_subdomains": bool(config.get("allow_subdomains", False)),
+            "respect_robots": bool(config.get("respect_robots", True)),
+            "rate_limit_delay": float(config.get("rate_limit_delay", 0.0)),
+            "seed_urls": config.get("seed_urls", []),
+        },
     )
 
     ingest_pipeline = IngestPipeline(
         crawler=crawler,
-        index_path=config["index_dir"],  # where FaissDatabase.save/load should read/write
+        index_path=config["index_dir"],
         embedder=embedder,
         db=db,
         summarizer=summarizer,

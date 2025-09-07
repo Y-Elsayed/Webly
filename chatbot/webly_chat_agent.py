@@ -1,4 +1,7 @@
 import string
+from typing import Optional,List
+
+# Keep your original import for Chatbot
 from chatbot.base_chatbot import Chatbot
 
 
@@ -8,9 +11,9 @@ class WeblyChatAgent:
         embedder,
         vector_db,
         chatbot: Chatbot,
-        top_k=5,
-        prompt_template=None,
-        system_prompt: str = None
+        top_k: int = 5,
+        prompt_template: Optional[str] = None,
+        system_prompt: Optional[str] = None,
     ):
         self.embedder = embedder
         self.vector_db = vector_db
@@ -48,7 +51,9 @@ class WeblyChatAgent:
         }
         missing = required_fields - found_fields
         if missing:
-            raise ValueError(f"Prompt template is missing required placeholders: {', '.join(missing)}")
+            raise ValueError(
+                f"Prompt template is missing required placeholders: {', '.join(missing)}"
+            )
 
     def answer(self, question: str, context: str) -> str:
         context = context.strip()
@@ -57,32 +62,63 @@ class WeblyChatAgent:
 
         prompt = self.prompt_template.format(context=context, question=question)
         full_prompt = f"{self.system_prompt.strip()}\n\n{prompt.strip()}"
-        # print(full_prompt)  # keep disabled in production
 
         response = self.chatbot.generate(full_prompt).strip()
         if response == "N":
             return "I'm sorry, I couldn't find any relevant information to answer that question."
         return response
 
-    # === NEW: lightweight query rewriter ===
-    def rewrite_query(self, question: str, hints: list[str], max_chars: int = 300) -> str | None:
+    def rewrite_query(self, question: str, hints: List[str], max_chars: int = 500) -> Optional[str]:
         """
-        Ask the LLM for a surgical rewrite of the query to improve retrieval.
+        Ask the LLM for a surgical rewrite (or small set of sub-queries) to improve retrieval.
         Returns None if no rewrite is needed.
+
         - hints: short strings like top headings, anchor texts, or page titles.
+        - Output contract preserved: str | None. If multiple queries are needed, they are returned
+          joined by " || " so the caller can split.
         """
-        hints_text = "; ".join(hints[:8])[:1000]
+        hints_text = "; ".join([h for h in hints[:8] if h])[:1000]
         prompt = (
-            "You help reformulate search queries to retrieve the most relevant website chunks.\n"
+            "You reformulate search queries to retrieve the most relevant website chunks.\n"
             "Original query:\n"
             f"{question.strip()}\n\n"
             "Context hints (headings/anchors):\n"
             f"{hints_text}\n\n"
-            "Rewrite the query to be clearer and more specific for retrieval.\n"
-            "If the original is already optimal, answer exactly: SAME\n"
-            f"Limit to {max_chars} characters. Output only the query text or SAME."
+            "If the original is already optimal, output exactly: SAME\n"
+            "Otherwise, return either: a single improved query, OR a short list of 2-4 focused sub-queries.\n"
+            "- If returning a list, use one bullet per line starting with '-' or a number.\n"
+            f"Limit the whole output to {max_chars} characters or less. Output only the query text(s) or SAME."
         )
-        rewritten = self.chatbot.generate(prompt).strip()
-        if not rewritten or rewritten.upper() == "SAME":
+        raw = (self.chatbot.generate(prompt) or "").strip()
+        if not raw or raw.upper() == "SAME":
             return None
-        return rewritten
+        return self._normalize_rewrites(raw)
+
+    # ---------------- Internal helpers ----------------
+    def _normalize_rewrites(self, text: str) -> Optional[str]:
+        """Normalize LLM output to single string. Multiple queries are joined by " || "."""
+        lines = [ln.strip(" -*\t").strip() for ln in text.splitlines() if ln.strip()]
+        # If looks like bullets/multi-lines, compress to ' || '
+        if len(lines) >= 2:
+            merged = " || ".join(lines)
+            return merged[:3000] if merged else None
+        return text[:3000] if text else None
+
+    def _judge_answerability(self, question: str, context: str) -> bool:
+        """
+        Quick LLM probe to check if the provided context is *sufficient* to answer the question.
+        Returns True if the model is confident the answer can be answered *fully* from context.
+        """
+        ctx_preview = context[:6000]  # keep tiny and cheap
+        probe = (
+            "You are checking if the following website context contains enough information to fully answer the question.\n"
+            "Answer ONLY 'YES' or 'NO'.\n\n"
+            f"Question: {question}\n\n"
+            f"Context:\n{ctx_preview}\n\n"
+            "Sufficient?"
+        )
+        try:
+            verdict = (self.chatbot.generate(probe) or "").strip().upper()
+        except Exception:
+            return False
+        return verdict.startswith("Y")
