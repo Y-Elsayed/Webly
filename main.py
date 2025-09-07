@@ -16,9 +16,9 @@ from vector_index.faiss_db import FaissDatabase
 from crawl.crawler import Crawler
 
 
-def build_pipelines(config):
+def build_pipelines(config, api_key: str | None = None):
     load_dotenv()
-    API_KEY = os.getenv("OPENAI_API_KEY")
+    API_KEY = api_key or os.getenv("OPENAI_API_KEY")
     if not API_KEY:
         raise RuntimeError("Missing OPENAI_API_KEY")
 
