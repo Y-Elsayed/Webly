@@ -1,0 +1,15 @@
+version: "3.9"
+services:
+  webly:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # args:
+      #   ENABLE_PLAYWRIGHT: "1"
+    image: webly:latest
+    ports:
+      - "8501:8501"
+    env_file: .env
+    volumes:
+      - ./Webly/websites_storage:/app/Webly/websites_storage
+    restart: unless-stopped

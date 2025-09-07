@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+.env
+.venv/
+venv/
+.env.*
+.git/
+.github/
+node_modules/
+websites_storage/**
+!websites_storage/.gitkeep
