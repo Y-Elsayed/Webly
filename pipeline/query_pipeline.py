@@ -1,7 +1,7 @@
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Union, Callable
+from urllib.parse import urlparse, parse_qsl, urlunparse, urlencode
 from collections import defaultdict
 import math
-
 
 class QueryPipeline:
     """
@@ -9,23 +9,27 @@ class QueryPipeline:
     - Initial semantic search
     - Optional LLM query rewrite + second search
     - Graph-aware expansion (backlinks via anchor_text, optional section/sibling expansion)
-    - Re-ranking + length trimming
+    - Re-ranking + length trimming (dynamic context budget when possible)
     - Sectioned context assembly
+    - NEW: Iterative multi-hop retrieval with answerability checks and graceful fallback
+
+    Public API is unchanged. Constructor signature and .query(question, retry_on_empty) remain the same.
     """
+
     def __init__(
         self,
         chat_agent,
-        recrawl_fn: Optional[callable] = None,
+        recrawl_fn: Optional[Callable] = None,
         enable_rewrite: bool = True,
         enable_graph_expansion: bool = True,
         enable_section_expansion: bool = True,
         max_context_chars: int = 12000,
         max_results_to_consider: int = 30,  # across all passes
-        top_k_first_pass: int | None = None,  # default to chat_agent.top_k if None
-        top_k_second_pass: int | None = None, # for rewrite/expansion passes
-        anchor_boost: float = 0.10,           # boost for results sourced via anchor/backlink expansion
-        section_boost: float = 0.05,          # mild boost for same-section/sibling expansion
-        debug: bool = False                   # NEW: toggle detailed logging
+        top_k_first_pass: Optional[int] = None,  # default to chat_agent.top_k if None
+        top_k_second_pass: Optional[int] = None,  # for rewrite/expansion passes
+        anchor_boost: float = 0.10,  # boost for results sourced via anchor/backlink expansion
+        section_boost: float = 0.05,  # mild boost for same-section/sibling expansion
+        debug: bool = True,
     ):
         self.chat_agent = chat_agent
         self.recrawl_fn = recrawl_fn
@@ -35,10 +39,9 @@ class QueryPipeline:
         self.enable_section_expansion = enable_section_expansion
 
         self.max_context_chars = max_context_chars
-        self.max_results_to_consider = max_results_to_consider
-
-        self.top_k_first_pass = top_k_first_pass or chat_agent.top_k
-        self.top_k_second_pass = top_k_second_pass or max(chat_agent.top_k, 5)
+        self.top_k_first_pass = top_k_first_pass or max( self.chat_agent.top_k, 8 )
+        self.top_k_second_pass =top_k_second_pass or max( self.chat_agent.top_k, 10 )
+        self.max_results_to_consider = max(max_results_to_consider, 40)
 
         self.anchor_boost = anchor_boost
         self.section_boost = section_boost
@@ -49,69 +52,125 @@ class QueryPipeline:
         if self.debug:
             print(f"\n[DEBUG] User query: {question}")
 
-        # Pass 1: initial search
+        # === Pass 1: initial search ===
         initial_results = self._search(question, self.top_k_first_pass, tag="initial")
         if self.debug:
             print(f"[DEBUG] Initial results ({len(initial_results)}): {[r.get('id') for r in initial_results]}")
 
         if retry_on_empty and not initial_results and self.recrawl_fn:
-            self.chat_agent.logger.info("[QueryPipeline] No context found. Triggering re-crawl.")
+            try:
+                self.chat_agent.logger.info("[QueryPipeline] No context found. Triggering re-crawl.")
+            except Exception:
+                pass
             self.recrawl_fn()
             initial_results = self._search(question, self.top_k_first_pass, tag="initial-after-recrawl")
 
         if not initial_results:
-            return "Sorry, I couldn't find relevant information."
+            return self._fallback_message([], question)
 
-        # Optional: fast query rewrite using top hints
-        rewritten_query = None
-        if self.enable_rewrite:
-            hints = self._collect_hints_for_rewrite(initial_results)
-            rewritten_query = self.chat_agent.rewrite_query(question, hints)
+        saved_results: List[Dict[str, Any]] = []
+        saved_results.extend(initial_results)
+
+        # Optional expansions for the initial seeds
+        seeds = list(initial_results)
+        if self.enable_graph_expansion:
+            graph_expanded = self._expand_via_graph(question, seeds)
+            if self.debug and graph_expanded:
+                print(f"[DEBUG] Graph expansion added {len(graph_expanded)} results")
+            saved_results.extend(graph_expanded)
+        if self.enable_section_expansion:
+            section_expanded = self._expand_via_section(question, seeds)
+            if self.debug and section_expanded:
+                print(f"[DEBUG] Section expansion added {len(section_expanded)} results")
+            saved_results.extend(section_expanded)
+
+        # Combine, dedupe, and prepare first context
+        combined = self._combine_and_rerank(saved_results)
+        combined = combined[: self.max_results_to_consider]
+
+        context = self._assemble_context(combined, max_chars=self._compute_budget_chars(question))
+        if self.debug:
+            print(f"[DEBUG] Context v1 length: {len(context)} chars")
+
+        # If we can already answer, do it
+        if self.chat_agent._judge_answerability(question, context):
+            return self.chat_agent.answer(question, context)
+
+        # === Iterative multi-hop: rewrite + targeted searches ===
+        # We'll run up to 2 iterative hops (total 3 attempts counting initial)
+        max_hops = 2
+        tried_queries: List[str] = [question]
+
+        for hop in range(1, max_hops + 1):
+            if not self.enable_rewrite:
+                break
+
+            hints = self._collect_hints_for_rewrite(combined)
+            rewrites = self.chat_agent.rewrite_query(question, hints)
             if self.debug:
-                print(f"[DEBUG] Rewritten query: {rewritten_query}")
+                print(f"[DEBUG] Hop {hop} rewrites: {rewrites}")
 
-        rewritten_results = self._search(rewritten_query, self.top_k_second_pass, tag="rewrite") if rewritten_query else []
-        if self.debug and rewritten_results:
-            print(f"[DEBUG] Rewritten results ({len(rewritten_results)}): {[r.get('id') for r in rewritten_results]}")
+            if not rewrites:
+                break
 
-        # Graph-aware expansion
-        graph_expanded_results = self._expand_via_graph(question, initial_results + rewritten_results) \
-                                 if self.enable_graph_expansion else []
-        if self.debug and graph_expanded_results:
-            print(f"[DEBUG] Graph expansion added {len(graph_expanded_results)} results")
+            # Support multi-queries encoded as "q1 || q2 || q3"
+            subqueries = [q.strip() for q in rewrites.split("||") if q.strip()]
+            subqueries = [q for q in subqueries if q not in tried_queries]
+            if not subqueries:
+                break
 
-        # Section/sibling expansion
-        section_expanded_results = self._expand_via_section(question, initial_results + rewritten_results) \
-                                   if self.enable_section_expansion else []
-        if self.debug and section_expanded_results:
-            print(f"[DEBUG] Section expansion added {len(section_expanded_results)} results")
+            # Run second-pass searches for each subquery
+            hop_results: List[Dict[str, Any]] = []
+            for q in subqueries:
+                hop_results.extend(self._search(q, self.top_k_second_pass, tag="rewrite"))
 
-        # Combine + rerank + trim
-        combined = self._combine_and_rerank(initial_results, rewritten_results, graph_expanded_results, section_expanded_results)
-        trimmed = combined[: self.max_results_to_consider]
-        if self.debug:
-            print(f"[DEBUG] Combined + reranked results ({len(trimmed)} kept): {[r.get('id') for r in trimmed]}")
+            if self.debug and hop_results:
+                print(f"[DEBUG] Hop {hop} rewritten results: {[r.get('id') for r in hop_results]}")
 
-        # Build sectioned context
-        context = self._assemble_context(trimmed, max_chars=self.max_context_chars)
-        if self.debug:
-            print(f"[DEBUG] Final context length: {len(context)} chars")
+            # Optional expansions on hop results
+            if self.enable_graph_expansion and hop_results:
+                hop_graph = self._expand_via_graph(question, hop_results)
+                if self.debug and hop_graph:
+                    print(f"[DEBUG] Hop {hop} graph expansion added {len(hop_graph)} results")
+                hop_results.extend(hop_graph)
+            if self.enable_section_expansion and hop_results:
+                hop_section = self._expand_via_section(question, hop_results)
+                if self.debug and hop_section:
+                    print(f"[DEBUG] Hop {hop} section expansion added {len(hop_section)} results")
+                hop_results.extend(hop_section)
 
-        return self.chat_agent.answer(question, context)
+            # Merge with what we already have and re-assemble context
+            saved_results.extend(hop_results)
+            combined = self._combine_and_rerank(saved_results)[: self.max_results_to_consider]
+            context = self._assemble_context(combined, max_chars=self._compute_budget_chars(question))
+            if self.debug:
+                print(f"[DEBUG] Context after hop {hop}: {len(context)} chars")
+
+            if self.chat_agent._judge_answerability(question, context):
+                return self.chat_agent.answer(question, context)
+
+            tried_queries.extend(subqueries)
+
+        # If we still can't answer confidently, return a natural fallback with helpful links
+        return self._fallback_message(combined, question)
 
     # ---------------- Helpers ----------------
-    def _search(self, query: Optional[str], k: int, tag: str) -> List[Dict[str, Any]]:
+    def _search(self, query: Optional[Union[str, List[str]]], k: int, tag: str) -> List[Dict[str, Any]]:
         if not query:
             return []
-        q_emb = self.chat_agent.embedder.embed(query)
-        results = self.chat_agent.vector_db.search(q_emb, top_k=k) or []
-        for i, r in enumerate(results):
-            r.setdefault("_meta_rank", i)
-            r.setdefault("_origin", tag)
-        return results
+        queries = [query] if isinstance(query, str) else list(query)
+        all_results: List[Dict[str, Any]] = []
+        for q in queries:
+            q_emb = self.chat_agent.embedder.embed(q)
+            results = self.chat_agent.vector_db.search(q_emb, top_k=k) or []
+            for i, r in enumerate(results):
+                r.setdefault("_meta_rank", i)
+                r.setdefault("_origin", tag)
+            all_results.extend(results)
+        return all_results
 
     def _collect_hints_for_rewrite(self, results: List[Dict[str, Any]]) -> List[str]:
-        hints = []
+        hints: List[str] = []
         for r in results[:8]:
             if r.get("hierarchy"):
                 hints.append(" > ".join(r["hierarchy"]))
@@ -136,7 +195,7 @@ class QueryPipeline:
                 seen_queries.add(q)
                 res = self._search(q, k=3, tag="graph-anchor")
                 for x in res:
-                    x["_boost_reason"] = "anchor"
+                    x.setdefault("_boost_reason", "anchor")
                 expansions.extend(res)
         return expansions
 
@@ -158,15 +217,21 @@ class QueryPipeline:
 
             res = self._search(q, k=3, tag="section")
             for x in res:
-                x["_boost_reason"] = "section"
+                x.setdefault("_boost_reason", "section")
             expansions.extend(res)
         return expansions
 
     def _combine_and_rerank(self, *result_groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        origin_priority = {"initial": 3, "initial-after-recrawl": 3, "rewrite": 2, "graph-anchor": 1, "section": 1}
-        by_id: Dict[str, Dict[str, Any]] = {}
+        # Allow both call styles: _combine_and_rerank(list) or _combine_and_rerank(list1, list2, ...)
+        groups: List[List[Dict[str, Any]]] = []
+        if len(result_groups) == 1 and isinstance(result_groups[0], list):
+            # single list possibly passed in
+            groups = [result_groups[0]]
+        else:
+            groups = list(result_groups)
 
-        for group in result_groups:
+        by_id: Dict[str, Dict[str, Any]] = {}
+        for group in groups:
             for r in group:
                 rid = r.get("id") or f"{r.get('url','')}#chunk_{r.get('chunk_index',-1)}"
                 if rid in by_id:
@@ -190,12 +255,60 @@ class QueryPipeline:
             if r.get("_boost_reason") == "section":
                 boost += self.section_boost
 
-            origin_pri = {"initial": 3, "initial-after-recrawl": 3, "rewrite": 2, "graph-anchor": 1, "section": 1}.get(r.get("_origin", ""), 0)
+            origin_pri = {
+                "initial": 3,
+                "initial-after-recrawl": 3,
+                "rewrite": 2,
+                "graph-anchor": 1,
+                "section": 1,
+            }.get(r.get("_origin", ""), 0)
             meta_rank = r.get("_meta_rank", 9999)
             return (score + boost, origin_pri, -meta_rank)
 
         combined.sort(key=rank_key, reverse=True)
-        return combined
+        max_per_parent = 2  # allow up to 2 segments from the same page; tune 1–3
+        by_parent = {}
+        parent_limited = []
+        for r in combined:
+            meta = r.get("metadata") or {}
+            parent = meta.get("chunk_id") or meta.get("parent_id") \
+                    or (r.get("url") or r.get("source") or "")
+            cnt = by_parent.get(parent, 0)
+            if cnt >= max_per_parent:
+                continue
+            by_parent[parent] = cnt + 1
+            parent_limited.append(r)
+
+        # --- Stage B: cap per canonical URL (collapse ?page=1/2, utm_* etc.)
+        max_per_canon = 1   # usually 1 is ideal; set 2 if pagination genuinely differs
+        seen_canon = {}
+        canon_limited = []
+        for r in parent_limited:
+            canon = self._normalize_for_dedupe(r.get("url") or r.get("source") or "")
+            cnt = seen_canon.get(canon, 0)
+            if cnt >= max_per_canon:
+                continue
+            seen_canon[canon] = cnt + 1
+            canon_limited.append(r)
+
+        return canon_limited
+    
+    def _normalize_for_dedupe(self, url: str) -> str:
+        try:
+            u = urlparse(url)
+            drop = {
+                "utm_source","utm_medium","utm_campaign","utm_term","utm_content",
+                "fbclid","gclid","ref","ref_src","ref_url","page"
+            }
+            kept = [(k, v) for k, v in parse_qsl(u.query, keep_blank_values=True)
+                    if k.lower() not in drop]
+            kept.sort()
+            scheme = (u.scheme or "https").lower()
+            netloc = (u.netloc or "").lower()
+            path = (u.path or "/").rstrip("/") or "/"
+            return urlunparse((scheme, netloc, path, "", urlencode(kept), ""))  # no fragment
+        except Exception:
+            return url or ""
 
     def _assemble_context(self, results: List[Dict[str, Any]], max_chars: int) -> str:
         section_groups: Dict[str, List[str]] = defaultdict(list)
@@ -218,7 +331,8 @@ class QueryPipeline:
             chunk_text = f"{prefix}{text}\n\n(Source: {url})"
 
             if total + len(chunk_text) > max_chars:
-                preview = chunk_text[: max(0, max_chars - total)]
+                remaining = max(0, max_chars - total)
+                preview = chunk_text[:remaining]
                 if preview:
                     top = (r.get("hierarchy") or ["General"])[0]
                     section_groups[top].append(preview)
@@ -239,3 +353,48 @@ class QueryPipeline:
                 blocks.append(full)
 
         return "\n\n---\n\n".join(blocks).strip()
+
+    def _compute_budget_chars(self, question: str) -> int:
+        """
+        Adaptive context size. If the underlying model looks like GPT‑4o with large window,
+        let the context breathe (while capping to a safe ceiling). Otherwise, fall back to
+        the configured max_context_chars.
+        """
+        base = max(self.max_context_chars, 8000)  # never go below 8k chars
+        model_name = getattr(self.chat_agent.chatbot, "model_name", "").lower()
+        # Very rough heuristic: 1 token ~ 4 chars. Keep a safety margin for prompts & answer.
+        if "gpt-4o" in model_name or "4o" in model_name:
+            return min(int(base * 3), 60000)  # up to ~60k chars when possible
+        return base
+
+    def _fallback_message(self, results: List[Dict[str, Any]], question: str) -> str:
+        """
+        Natural fallback when we can't find enough info. Provide a few helpful links if any
+        retrieved items exist; otherwise a concise apology.
+        """
+        if not results:
+            return "I couldn't find anything on this site related to your question."
+
+        # Pick up to 3 distinct useful URLs with optional section labels
+        links: List[str] = []
+        seen = set()
+        for r in results:
+            url = r.get("url") or r.get("source")
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            section = " > ".join(r.get("hierarchy", [])[:2]) if r.get("hierarchy") else None
+            if section:
+                links.append(f"- {section}: {url}")
+            else:
+                links.append(f"- {url}")
+            if len(links) >= 3:
+                break
+
+        if not links:
+            return "I couldn't find enough relevant information here to answer that."
+
+        return (
+            "I couldn't find enough information on this site to answer that directly. "
+            "These pages may help:\n" + "\n".join(links)
+        )
