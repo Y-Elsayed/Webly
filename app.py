@@ -2,6 +2,7 @@ import os
 import sys
 import streamlit as st
 from urllib.parse import urlparse
+from openai import OpenAI
 
 # ------------------------------------------------------------------------------------
 # Paths & imports
@@ -57,6 +58,26 @@ EMBEDDER_OPTIONS = {
 # ------------------------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------------------------
+
+def _mask_key(k: str) -> str:
+    if not k or len(k) < 8: 
+        return "••••"
+    return f"{k[:3]}••••••••{k[-4:]}"
+
+def _validate_openai_key(k: str) -> tuple[bool, str | None]:
+    try:
+        # Minimal call that won’t leak the key; errors are sanitized below.
+        client = OpenAI(api_key=k)
+        # A very cheap health check; you can also do client.embeddings.create(...) with a tiny input
+        _ = client.models.list()
+        return True, None
+    except Exception as e:
+        # Don’t echo back secrets; trim noisy messages
+        msg = str(e)
+        if "api_key" in msg.lower(): msg = "Invalid or unauthorized key."
+        return False, msg
+    
+    
 def _index_dir_ready(index_dir: str) -> bool:
     """Return True if index_dir exists and has a .index and a metadata.* file."""
     if not index_dir or not os.path.isdir(index_dir):
@@ -158,6 +179,32 @@ def _on_project_change():
 # ------------------------------------------------------------------------------------
 with st.sidebar:
     st.header("🌐 Webly Projects")
+    st.subheader("🔑 OpenAI")
+    current = st.session_state.get("user_openai_key")
+    if current:
+        st.success(f"Connected with key {_mask_key(current)}")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("Forget key"):
+                st.session_state.user_openai_key = None
+                st.success("Key removed from this session.")
+        with col_b:
+            if st.button("Rebuild with this key"):
+                # Rebuild pipelines for the active project (if any) using this key
+                if st.session_state.get("active_project"):
+                    proj = st.session_state.active_project
+                    cfg = load_project_config(manager, proj)
+                    st.session_state.ingest_pipeline, st.session_state.query_pipeline = build_pipelines(cfg, api_key=current)
+                    st.success("Pipelines rebuilt.")
+    else:
+        k = st.text_input("Paste your OpenAI API key", type="password", placeholder="sk-...", help="Stored in memory for your session only.")
+        if st.button("Connect"):
+            ok, err = _validate_openai_key(k.strip())
+            if ok:
+                st.session_state.user_openai_key = k.strip()
+                st.success("Connected. Your key is kept only in this session.")
+            else:
+                st.error(err or "Could not validate key.")
 
     # --- New Project ---
     if st.button("➕ New Project"):
