@@ -6,16 +6,17 @@ class HTMLSaver:
     """
     def __call__(self, url: str, html: str) -> dict:
         if not url or not isinstance(url, str):
-            print(f"[HTMLSaver] Skipping record due to missing or invalid URL: {url}")
+            return {}
+        url = url.strip()
+        if not url:
             return {}
 
         html = html or ""
         if not html.strip():
-            print(f"[HTMLSaver] Skipping empty HTML page: {url}")
             return {}
 
         return {
-            "url": url.strip(),
+            "url": url,
             "html": html,
             "length": len(html)
         }

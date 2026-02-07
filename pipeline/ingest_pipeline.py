@@ -6,10 +6,14 @@ import re
 from crawl.crawler import Crawler
 from embedder.base_embedder import Embedder
 from vector_index.vector_db import VectorDatabase
-from processors.text_summarizer import TextSummarizer
+try:
+    from processors.text_summarizer import TextSummarizer
+except Exception:
+    TextSummarizer = object
 from processors.page_processor import SemanticPageProcessor
 from processors.text_chunkers import DefaultChunker
 from processors.text_extractors import DefaultTextExtractor
+from webcreeper.creeper_core.utils import configure_logging
 
 
 class IngestPipeline:
@@ -35,7 +39,8 @@ class IngestPipeline:
         results_path: Optional[str] = None,
         use_summary: bool = True,
         debug: bool = False,
-        debug_summary_path: Optional[str] = None
+        debug_summary_path: Optional[str] = None,
+        progress_callback=None
     ):
         self.crawler = crawler
         self.index_path = index_path
@@ -48,6 +53,8 @@ class IngestPipeline:
             getattr(crawler, "output_dir", "."), getattr(crawler, "results_filename", "results.jsonl")
         )
         self.debug = bool(debug)
+        self.logger = configure_logging(self.__class__.__name__)
+        self.progress_callback = progress_callback
 
         # Debug file paths
         if debug_summary_path:
@@ -145,7 +152,7 @@ class IngestPipeline:
             if isinstance(data, dict) and "summary" in data and data["summary"]:
                 return data["summary"]
         except Exception as e:
-            print(f"[IngestPipeline] Summarizer error for {url}: {e}")
+            self.logger.error(f"Summarizer error for {url}: {e}")
         return None
 
     # -------------------------------------------------------------------------
@@ -155,7 +162,7 @@ class IngestPipeline:
         """
         Run the crawler. We always provide a page-writer callback so results get saved.
         """
-        print("[IngestPipeline] Crawling site...")
+        self.logger.info("Crawling site...")
         writer_cb = override_callback or self._default_page_writer
         # Newer crawler signatures
         try:
@@ -176,7 +183,9 @@ class IngestPipeline:
         """
         Read results file -> chunk -> (optional) summarize -> embed.
         """
-        print(f"[IngestPipeline] Transforming pages (summarize = {self.use_summary and bool(self.summarizer)})")
+        self.logger.info(
+            f"Transforming pages (summarize = {self.use_summary and bool(self.summarizer)})"
+        )
         # Initialize FAISS index
         self.db.create(dim=self.embedder.dim)
         transformed_records: List[dict] = []
@@ -195,7 +204,7 @@ class IngestPipeline:
                 with open(graph_path, "r", encoding="utf-8") as gf:
                     site_graph = json.load(gf)
             except Exception as e:
-                print(f"[IngestPipeline] Failed to read graph.json: {e}")
+                self.logger.warning(f"Failed to read graph.json: {e}")
                 site_graph = {}
         else:
             site_graph = {}
@@ -217,9 +226,16 @@ class IngestPipeline:
         summary_debug_file = open(self.debug_summary_path, "w", encoding="utf-8") if self.debug else None
         chunk_debug_file = open(self.debug_chunks_path, "w", encoding="utf-8") if self.debug else None
 
-        # Stream results
+        # Stream results (compute total for progress if possible)
+        total_lines = None
+        try:
+            with open(resolved_results, "r", encoding="utf-8") as count_f:
+                total_lines = sum(1 for _ in count_f)
+        except Exception:
+            total_lines = None
+
         with open(resolved_results, "r", encoding="utf-8") as f:
-            for line in f:
+            for idx, line in enumerate(f, start=1):
                 try:
                     record = json.loads(line)
                     url = record.get("url")
@@ -229,10 +245,18 @@ class IngestPipeline:
                     incoming_links = incoming_map.get(url, [])
 
                     if not url or not html:
-                        print(f"[IngestPipeline] Skipping malformed record (missing url/html): {record}")
+                        self.logger.warning(
+                            f"Skipping malformed record (missing url/html): {record}"
+                        )
                         continue
 
                     chunks = self.page_processor.process(url, html)
+
+                    if self.progress_callback:
+                        try:
+                            self.progress_callback(idx, total_lines, url)
+                        except Exception:
+                            pass
 
                     for chunk in chunks:
                         content_to_embed = chunk.get("text", "")
@@ -275,10 +299,14 @@ class IngestPipeline:
                             try:
                                 embedding = self.embedder.embed(part)
                             except Exception as e:
-                                print(f"[IngestPipeline] Embedding error for {url} (seg {seg_idx}): {e}")
+                                self.logger.error(
+                                    f"Embedding error for {url} (seg {seg_idx}): {e}"
+                                )
                                 continue
                             if embedding is None:
-                                print(f"[IngestPipeline] Skipping chunk from {url} seg {seg_idx} - embedding returned None.")
+                                self.logger.warning(
+                                    f"Skipping chunk from {url} seg {seg_idx} - embedding returned None."
+                                )
                                 continue
 
                             rec = {
@@ -300,17 +328,17 @@ class IngestPipeline:
 
 
                 except json.JSONDecodeError:
-                    print("[IngestPipeline] Skipping line (not valid JSON).")
+                    self.logger.warning("Skipping line (not valid JSON).")
                 except Exception as e:
-                    print(f"[IngestPipeline] Skipping record due to error: {e}")
+                    self.logger.warning(f"Skipping record due to error: {e}")
 
         if summary_debug_file:
             summary_debug_file.close()
-            print(f"[IngestPipeline] Wrote debug summaries to {self.debug_summary_path}")
+            self.logger.info(f"Wrote debug summaries to {self.debug_summary_path}")
 
         if chunk_debug_file:
             chunk_debug_file.close()
-            print(f"[IngestPipeline] Wrote raw chunks to {self.debug_chunks_path}")
+            self.logger.info(f"Wrote raw chunks to {self.debug_chunks_path}")
 
         return transformed_records
 
@@ -325,12 +353,12 @@ class IngestPipeline:
             try:
                 self.db.add([rec])
             except Exception as e:
-                print(f"[IngestPipeline] Failed to add record: {e}")
+                self.logger.error(f"Failed to add record: {e}")
 
         # Persist index + metadata
         try:
             self.db.save(self.index_path)
-            print(f"[IngestPipeline] Saved index to {self.index_path}")
+            self.logger.info(f"Saved index to {self.index_path}")
         except Exception as e:
             raise RuntimeError(f"[IngestPipeline] Failed to save index to {self.index_path}: {e}")
 
@@ -361,7 +389,7 @@ class IngestPipeline:
             need_crawl = force_crawl or not (os.path.exists(resolved_before) and os.path.getsize(resolved_before) > 0)
 
             if need_crawl:
-                print(f"[IngestPipeline] Crawling (force={force_crawl})...")
+                self.logger.info(f"Crawling (force={force_crawl})...")
                 writer_cb = override_callback or self._default_page_writer
 
                 try:
@@ -413,10 +441,10 @@ class IngestPipeline:
                 return result
 
             else:
-                print(f"[IngestPipeline] Using cached results at {resolved_before}")
+                self.logger.info(f"Using cached results at {resolved_before}")
 
             if mode == "crawl_only":
-                print("[IngestPipeline] Crawl-only mode complete.")
+                self.logger.info("Crawl-only mode complete.")
                 return {
                     "crawled": True,
                     "indexed": False,
@@ -439,7 +467,7 @@ class IngestPipeline:
                 }
             records = self.transform()
             self.load(records)
-            print("[IngestPipeline] Indexing phase complete.")
+            self.logger.info("Indexing phase complete.")
             return {
                 "crawled": (mode == "both"),
                 "indexed": True,
@@ -470,7 +498,8 @@ class IngestPipeline:
         return out
 
     def _chunk_for_embedding(self, text: str, safety_ratio: float = 0.9) -> list[str]:
-        max_tok = int(self._max_input_tokens() * safety_ratio)
+        ratio = getattr(self.embedder, "safety_ratio", safety_ratio)
+        max_tok = int(self._max_input_tokens() * ratio)
         if self._count_tokens(text) <= max_tok:
             return [text]
         paras = re.split(r"\n{2,}", text)

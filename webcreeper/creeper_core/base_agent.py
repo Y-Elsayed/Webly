@@ -27,7 +27,7 @@ class BaseAgent(ABC):
         "max_retries": 2,                 # transient retries
         "backoff_factor": 0.5,            # seconds * (2**attempt)
         "status_forcelist": [429, 500, 502, 503, 504],
-        "rate_limit_delay": 0.0,          # seconds between requests per host
+        "rate_limit_delay": 0.2,          # seconds between requests per host
         "respect_robots": True,           # honor robots.txt
         "allowed_domains": [],            # exact hosts (or apex if allow_subdomains=True)
         "blocked_domains": [],            # explicit deny
@@ -323,10 +323,6 @@ class BaseAgent(ABC):
                 return None
 
     # -------------------- visit policy --------------------
-
-    def is_allowed_by_robots(self, url: str) -> bool:
-        # (overridden just above; keep method name/signature)
-        return super().is_allowed_by_robots(url) if hasattr(super(), "is_allowed_by_robots") else True
 
     def should_visit(self, url: str) -> bool:
         # Already visited?
