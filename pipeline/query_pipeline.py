@@ -2,6 +2,7 @@ from typing import Optional, Dict, Any, List, Tuple, Union, Callable
 from urllib.parse import urlparse, parse_qsl, urlunparse, urlencode
 from collections import defaultdict
 import math
+import re
 
 class QueryPipeline:
     """
@@ -23,6 +24,9 @@ class QueryPipeline:
         enable_rewrite: bool = True,
         enable_graph_expansion: bool = True,
         enable_section_expansion: bool = True,
+        enable_hybrid: bool = True,
+        enable_answerability_check: bool = True,
+        allow_best_effort: bool = True,
         max_context_chars: int = 12000,
         max_results_to_consider: int = 30,  # across all passes
         top_k_first_pass: Optional[int] = None,  # default to chat_agent.top_k if None
@@ -37,6 +41,9 @@ class QueryPipeline:
         self.enable_rewrite = enable_rewrite
         self.enable_graph_expansion = enable_graph_expansion
         self.enable_section_expansion = enable_section_expansion
+        self.enable_hybrid = enable_hybrid
+        self.enable_answerability_check = enable_answerability_check
+        self.allow_best_effort = allow_best_effort
 
         self.max_context_chars = max_context_chars
         self.top_k_first_pass = top_k_first_pass or max( self.chat_agent.top_k, 8 )
@@ -47,13 +54,29 @@ class QueryPipeline:
         self.section_boost = section_boost
         self.debug = debug
 
+        # Hybrid retrieval (BM25) cache
+        self._bm25_ready = False
+        self._bm25_docs = []
+        self._bm25_doc_ids = []
+        self._bm25 = None
+        self._bm25_avgdl = 0.0
+        self._bm25_df = defaultdict(int)
+        self._bm25_idf = {}
+        self._bm25_k1 = 1.5
+        self._bm25_b = 0.75
+
     # ---------------- Core entrypoint ----------------
-    def query(self, question: str, retry_on_empty: bool = False) -> str:
+    def query(self, question: str, retry_on_empty: bool = False, memory_context: str = "") -> str:
         if self.debug:
             print(f"\n[DEBUG] User query: {question}")
+            if memory_context:
+                print(f"[DEBUG] Memory context length: {len(memory_context)} chars")
+
+        question_for_search = f"{memory_context}\n{question}".strip() if memory_context else question
+        question_for_answer = f"{memory_context}\nUser: {question}".strip() if memory_context else question
 
         # === Pass 1: initial search ===
-        initial_results = self._search(question, self.top_k_first_pass, tag="initial")
+        initial_results = self._search(question_for_search, self.top_k_first_pass, tag="initial")
         if self.debug:
             print(f"[DEBUG] Initial results ({len(initial_results)}): {[r.get('id') for r in initial_results]}")
 
@@ -63,7 +86,7 @@ class QueryPipeline:
             except Exception:
                 pass
             self.recrawl_fn()
-            initial_results = self._search(question, self.top_k_first_pass, tag="initial-after-recrawl")
+            initial_results = self._search(question_for_search, self.top_k_first_pass, tag="initial-after-recrawl")
 
         if not initial_results:
             return self._fallback_message([], question)
@@ -93,8 +116,8 @@ class QueryPipeline:
             print(f"[DEBUG] Context v1 length: {len(context)} chars")
 
         # If we can already answer, do it
-        if self.chat_agent._judge_answerability(question, context):
-            return self.chat_agent.answer(question, context)
+        if self.enable_answerability_check and self.chat_agent._judge_answerability(question_for_answer, context):
+            return self.chat_agent.answer(question_for_answer, context)
 
         # === Iterative multi-hop: rewrite + targeted searches ===
         # We'll run up to 2 iterative hops (total 3 attempts counting initial)
@@ -106,7 +129,7 @@ class QueryPipeline:
                 break
 
             hints = self._collect_hints_for_rewrite(combined)
-            rewrites = self.chat_agent.rewrite_query(question, hints)
+            rewrites = self.chat_agent.rewrite_query(question_for_search, hints)
             if self.debug:
                 print(f"[DEBUG] Hop {hop} rewrites: {rewrites}")
 
@@ -146,13 +169,15 @@ class QueryPipeline:
             if self.debug:
                 print(f"[DEBUG] Context after hop {hop}: {len(context)} chars")
 
-            if self.chat_agent._judge_answerability(question, context):
-                return self.chat_agent.answer(question, context)
+            if self.enable_answerability_check and self.chat_agent._judge_answerability(question_for_answer, context):
+                return self.chat_agent.answer(question_for_answer, context)
 
             tried_queries.extend(subqueries)
 
         # If we still can't answer confidently, return a natural fallback with helpful links
-        return self._fallback_message(combined, question)
+        if self.allow_best_effort and combined:
+            return self.chat_agent.answer(question_for_answer, context)
+        return self._fallback_message(combined, question_for_answer)
 
     # ---------------- Helpers ----------------
     def _search(self, query: Optional[Union[str, List[str]]], k: int, tag: str) -> List[Dict[str, Any]]:
@@ -161,12 +186,23 @@ class QueryPipeline:
         queries = [query] if isinstance(query, str) else list(query)
         all_results: List[Dict[str, Any]] = []
         for q in queries:
+            # Vector search
             q_emb = self.chat_agent.embedder.embed(q)
             results = self.chat_agent.vector_db.search(q_emb, top_k=k) or []
             for i, r in enumerate(results):
                 r.setdefault("_meta_rank", i)
                 r.setdefault("_origin", tag)
+                r.setdefault("_score_vec", float(r.get("score") or 0.0))
             all_results.extend(results)
+
+            # Hybrid BM25 search (optional)
+            if self.enable_hybrid:
+                bm25_hits = self._bm25_search(q, top_k=max(8, k))
+                for i, r in enumerate(bm25_hits):
+                    r.setdefault("_meta_rank", i)
+                    r.setdefault("_origin", f"{tag}-bm25")
+                    r.setdefault("_score_bm25", float(r.get("_score_bm25") or 0.0))
+                all_results.extend(bm25_hits)
         return all_results
 
     def _collect_hints_for_rewrite(self, results: List[Dict[str, Any]]) -> List[str]:
@@ -248,7 +284,10 @@ class QueryPipeline:
         combined = list(by_id.values())
 
         def rank_key(r: Dict[str, Any]) -> Tuple:
-            score = float(r.get("score") or 0.0)
+            vec = float(r.get("_score_vec") or r.get("score") or 0.0)
+            bm25 = float(r.get("_score_bm25") or 0.0)
+            # Hybrid score: weighted sum (vector dominates, BM25 helps recall)
+            score = (0.75 * vec) + (0.25 * bm25)
             boost = 0.0
             if r.get("_boost_reason") == "anchor":
                 boost += self.anchor_boost
@@ -292,6 +331,77 @@ class QueryPipeline:
             canon_limited.append(r)
 
         return canon_limited
+
+    # ---------------- Hybrid retrieval (BM25) ----------------
+    def _tokenize(self, text: str) -> List[str]:
+        return re.findall(r"[A-Za-z0-9_]{2,}", (text or "").lower())
+
+    def _ensure_bm25(self):
+        if self._bm25_ready:
+            return
+        docs = []
+        doc_ids = []
+        for rec in (self.chat_agent.vector_db.metadata or []):
+            text = rec.get("text") or rec.get("summary") or ""
+            if not text:
+                continue
+            tokens = self._tokenize(text)
+            if not tokens:
+                continue
+            docs.append(tokens)
+            doc_ids.append(rec)
+
+        self._bm25_docs = docs
+        self._bm25_doc_ids = doc_ids
+        if not docs:
+            self._bm25_ready = True
+            return
+
+        df = defaultdict(int)
+        total_len = 0
+        for doc in docs:
+            total_len += len(doc)
+            for t in set(doc):
+                df[t] += 1
+        self._bm25_df = df
+        self._bm25_avgdl = total_len / max(len(docs), 1)
+        n_docs = len(docs)
+        self._bm25_idf = {t: math.log(1 + (n_docs - f + 0.5) / (f + 0.5)) for t, f in df.items()}
+        self._bm25_ready = True
+
+    def _bm25_search(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
+        self._ensure_bm25()
+        if not self._bm25_docs:
+            return []
+
+        q_terms = self._tokenize(query)
+        if not q_terms:
+            return []
+
+        scores = []
+        for i, doc in enumerate(self._bm25_docs):
+            doc_len = len(doc)
+            tf = defaultdict(int)
+            for t in doc:
+                tf[t] += 1
+            score = 0.0
+            for t in q_terms:
+                if t not in tf:
+                    continue
+                idf = self._bm25_idf.get(t, 0.0)
+                denom = tf[t] + self._bm25_k1 * (1 - self._bm25_b + self._bm25_b * (doc_len / self._bm25_avgdl))
+                score += idf * (tf[t] * (self._bm25_k1 + 1) / denom)
+            scores.append((score, i))
+
+        scores.sort(key=lambda x: x[0], reverse=True)
+        hits = []
+        for score, idx in scores[:top_k]:
+            if score <= 0:
+                continue
+            rec = self._bm25_doc_ids[idx].copy()
+            rec["_score_bm25"] = float(score)
+            hits.append(rec)
+        return hits
     
     def _normalize_for_dedupe(self, url: str) -> str:
         try:
