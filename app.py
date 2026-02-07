@@ -21,6 +21,28 @@ from storage.storage_manager import StorageManager
 # Page
 # ------------------------------------------------------------------------------------
 st.set_page_config(page_title="Webly", layout="wide")
+st.markdown(
+    """
+    <style>
+    /* Pin default Streamlit chat input without changing its look */
+    div[data-testid="stChatInput"] {
+        position: fixed;
+        bottom: 0;
+        left: 50%;
+        transform: translateX(-50%);
+        width: var(--content-width, 700px);
+        max-width: 90vw;
+        z-index: 1000;
+        background: transparent;
+    }
+    /* Prevent messages from being hidden behind the input */
+    .stMainBlockContainer {
+        padding-bottom: 7.5rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ------------------------------------------------------------------------------------
 # Session State
@@ -145,6 +167,29 @@ def ensure_chat_payload_shape(payload):
     payload.setdefault("messages", [])
     payload["settings"].setdefault("score_threshold", 0.5)
     return payload
+
+
+def build_memory_context(messages, max_chars: int = 2000) -> str:
+    """
+    Build a compact memory string from the most recent chat messages.
+    Includes roles and truncates to a character budget.
+    """
+    if not messages:
+        return ""
+    buf = []
+    total = 0
+    # Walk backwards, then reverse for chronological order
+    for msg in reversed(messages):
+        role = msg.get("role", "user")
+        content = (msg.get("content") or "").strip()
+        if not content:
+            continue
+        line = f"{role.title()}: {content}"
+        if total + len(line) + 1 > max_chars:
+            break
+        buf.append(line)
+        total += len(line) + 1
+    return "\n".join(reversed(buf)).strip()
 
 
 def rebuild_pipelines_for_project(project: str, api_key: str | None = None):
@@ -454,7 +499,7 @@ if projects and st.session_state.get("active_project"):
         for chat_name in chats:
             is_active = chat_name == active
             label = f"{chat_name}" + (" (active)" if is_active else "")
-            c1, c2 = st.columns([5, 1])
+            c1, c2, c3 = st.columns([4, 1, 1])
             with c1:
                 if st.button(label, key=f"sel_{chat_name}"):
                     st.session_state.active_chat = chat_name
@@ -462,6 +507,22 @@ if projects and st.session_state.get("active_project"):
                     st.session_state.chat_payload = ensure_chat_payload_shape(payload)
                     st.rerun()
             with c2:
+                if st.button("Clear memory", key=f"clear_{chat_name}"):
+                    if st.session_state.get("active_chat") == chat_name:
+                        st.session_state.chat_payload = {
+                            "title": chat_name,
+                            "settings": {"score_threshold": cfg.get("score_threshold", 0.5)},
+                            "messages": [],
+                        }
+                        manager.save_chat(current_project, chat_name, st.session_state.chat_payload)
+                    else:
+                        # Clear memory even if not active
+                        payload = manager.load_chat(current_project, chat_name)
+                        payload = ensure_chat_payload_shape(payload)
+                        payload["messages"] = []
+                        manager.save_chat(current_project, chat_name, payload)
+                    st.rerun()
+            with c3:
                 if st.button("Delete", key=f"del_{chat_name}"):
                     manager.delete_chat(current_project, chat_name)
                     if st.session_state.get("active_chat") == chat_name:
@@ -482,6 +543,8 @@ if projects and st.session_state.get("active_project"):
         if st.session_state.get("active_chat"):
             user_input = st.chat_input("Message Webly...")
             if user_input:
+                # Show user message immediately
+                st.chat_message("user").write(user_input)
                 payload["messages"].append({"role": "user", "content": user_input})
                 ensure_project_pipelines(current_project)
                 cfg_cur = load_project_config(current_project)
@@ -501,19 +564,24 @@ if projects and st.session_state.get("active_project"):
                             assistant_reply = f"Failed to load index: {e}"
                         else:
                             try:
-                                assistant_reply = st.session_state.query_pipeline.query(user_input)
+                                memory_ctx = build_memory_context(payload["messages"][:-1], max_chars=2000)
+                                assistant_reply = st.session_state.query_pipeline.query(
+                                    user_input, memory_context=memory_ctx
+                                )
                             except Exception as e:
                                 assistant_reply = f"Query failed: {e}"
                     else:
                         try:
-                            assistant_reply = st.session_state.query_pipeline.query(user_input)
+                            memory_ctx = build_memory_context(payload["messages"][:-1], max_chars=2000)
+                            assistant_reply = st.session_state.query_pipeline.query(
+                                user_input, memory_context=memory_ctx
+                            )
                         except Exception as e:
                             assistant_reply = f"Query failed: {e}"
 
                 payload["messages"].append({"role": "assistant", "content": assistant_reply})
                 st.session_state.chat_payload = payload
                 manager.save_chat(current_project, st.session_state.active_chat, payload)
-                st.chat_message("user").write(user_input)
                 st.chat_message("assistant").write(assistant_reply)
         else:
             st.info("Create or select a chat to start.")
