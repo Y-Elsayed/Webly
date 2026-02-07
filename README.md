@@ -1,5 +1,7 @@
 # 🌐 Webly — Give Your Website a Voice
 
+![CI](https://github.com/your_username/webly/actions/workflows/ci.yml/badge.svg)
+
 **Webly** is a modular, GenAI-powered web crawling and knowledge extraction framework. It transforms any website into a structured, searchable knowledge base — enabling intelligent search, chatbots, and Retrieval-Augmented Generation (RAG) pipelines.
 
 > _"Webly makes it feel like the website itself is answering your questions._  
@@ -74,13 +76,21 @@ webly/
 ## 📦 Setup
 
 1. Clone the repo  
-2. Install dependencies (Python 3.9+ recommended)
+2. Install dependencies (Python 3.11 recommended)
 
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Add your OpenAI API key in a `.env` file:
+Optional (local HF embeddings + summarization):
+
+```bash
+pip install -r requirements-ml.txt
+```
+
+If you want the old all-in-one set, use `requirements-full.txt`.
+
+3. Add your OpenAI API key in a `.env` file (see `.env.example`):
 
 ```env
 OPENAI_API_KEY=your-key-here
@@ -104,6 +114,14 @@ OPENAI_API_KEY=your-key-here
 
 ```bash
 python main.py
+```
+
+## ⚡ Quick Start (Streamlit)
+
+Run the UI:
+
+```bash
+streamlit run app.py
 ```
 
 ---
@@ -144,6 +162,20 @@ TextChunker() → MyChunker()
 
 ---
 
+## 🗺️ Roadmap
+
+See `ROADMAP.md` for contributor-friendly WebCreeper goals.
+
+---
+
 ## 📬 Contact
 
 Built with ☕ by [Yassin Ali](mailto:yelsayed003@gmail.com)
+
+---
+
+## 🔐 Security & Responsible Crawling
+
+- Never commit API keys or secrets. Use `.env` locally and keep it out of git.
+- Webly defaults to respecting `robots.txt` and uses a small request delay. You can override these,
+  but you are responsible for complying with site terms, local laws, and ethical scraping practices.

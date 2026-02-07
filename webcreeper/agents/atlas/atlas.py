@@ -47,14 +47,6 @@ class Atlas(BaseAgent):
 
     # --------------------------- helpers ---------------------------
 
-    def _norm_host(self, host: str) -> str:
-        """lowercase, strip port and leading www."""
-        if not host:
-            return ""
-        host = host.strip().lower()
-        host = host.split(":", 1)[0]
-        return host[4:] if host.startswith("www.") else host
-
     def _host_matches(self, host: str, allowed: str) -> bool:
         """Exact or subdomain match: foo.bar.com matches bar.com."""
         host = self._norm_host(host)
@@ -66,11 +58,6 @@ class Atlas(BaseAgent):
     def _is_http(self, url: str) -> bool:
         scheme = urlparse(url).scheme.lower()
         return scheme in ("http", "https")
-
-    def _strip_fragment(self, url: str) -> str:
-        parts = list(urlparse(url))
-        parts[5] = ""  # fragment
-        return urlunparse(parts)
 
     def _should_skip_heuristics(self, url: str) -> bool:
         if self.settings.get("heuristic_skip_long_urls", True) and len(url) > 2000:
@@ -152,12 +139,22 @@ class Atlas(BaseAgent):
             else:
                 ok = norm_host in norms
 
-            if not ok:
-                self.logger.info(
-                    f"Disallowed {url} -> Disallowed domain "
-                    f"(host={norm_host}, allowed={norms}, allow_subdomains={allow_sub})"
-                )
-                return False
+        if not ok:
+            self.logger.info(
+                f"Disallowed {url} -> Disallowed domain "
+                f"(host={norm_host}, allowed={norms}, allow_subdomains={allow_sub})"
+            )
+            return False
+
+        # Respect robots.txt if enabled
+        if not self.is_allowed_by_robots(url):
+            self.logger.info(f"Disallowed {url} -> Blocked by robots.txt")
+            return False
+
+        # Respect allow/block URL patterns if provided
+        if not self.is_allowed_by_patterns(url):
+            self.logger.info(f"Disallowed {url} -> Blocked by allow/block patterns")
+            return False
 
         return True
 

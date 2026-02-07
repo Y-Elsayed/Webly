@@ -1,7 +1,8 @@
-import os
+﻿import os
 import sys
-import streamlit as st
 from urllib.parse import urlparse
+
+import streamlit as st
 from openai import OpenAI
 
 # ------------------------------------------------------------------------------------
@@ -22,8 +23,9 @@ from storage.storage_manager import StorageManager
 st.set_page_config(page_title="Webly", layout="wide")
 
 # ------------------------------------------------------------------------------------
-# Session State Initialization
+# Session State
 # ------------------------------------------------------------------------------------
+
 def _init_state():
     defaults = {
         "active_project": None,
@@ -35,20 +37,22 @@ def _init_state():
         "rename_chat_open": None,
         "confirm_delete": None,
         "project_selector": None,
-        # inline re-index UI & last run status
-        "show_force_options": False,
+        "show_run_panel": False,
         "last_index_ok": None,
         "last_index_msg": "",
+        "user_openai_key": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
 
 _init_state()
 
 # ------------------------------------------------------------------------------------
 # Constants
 # ------------------------------------------------------------------------------------
+
 EMBEDDER_OPTIONS = {
     "HuggingFace (MiniLM)": "sentence-transformers/all-MiniLM-L6-v2",
     "OpenAI (text-embedding-3-small)": "openai:text-embedding-3-small",
@@ -59,27 +63,26 @@ EMBEDDER_OPTIONS = {
 # Helpers
 # ------------------------------------------------------------------------------------
 
+
 def _mask_key(k: str) -> str:
-    if not k or len(k) < 8: 
-        return "••••"
-    return f"{k[:3]}••••••••{k[-4:]}"
+    if not k or len(k) < 8:
+        return "****"
+    return f"{k[:3]}********{k[-4:]}"
+
 
 def _validate_openai_key(k: str) -> tuple[bool, str | None]:
     try:
-        # Minimal call that won’t leak the key; errors are sanitized below.
         client = OpenAI(api_key=k)
-        # A very cheap health check; you can also do client.embeddings.create(...) with a tiny input
         _ = client.models.list()
         return True, None
     except Exception as e:
-        # Don’t echo back secrets; trim noisy messages
         msg = str(e)
-        if "api_key" in msg.lower(): msg = "Invalid or unauthorized key."
+        if "api_key" in msg.lower():
+            msg = "Invalid or unauthorized key."
         return False, msg
-    
-    
+
+
 def _index_dir_ready(index_dir: str) -> bool:
-    """Return True if index_dir exists and has a .index and a metadata.* file."""
     if not index_dir or not os.path.isdir(index_dir):
         return False
     try:
@@ -90,8 +93,8 @@ def _index_dir_ready(index_dir: str) -> bool:
     has_meta = any(f.lower().startswith("metadata") for f in files)
     return has_index and has_meta
 
+
 def _domain_from_url(url: str) -> str:
-    """Extract bare domain from URL (strip scheme/port/www)."""
     try:
         netloc = urlparse(url).netloc.strip().lower()
         if netloc.startswith("www."):
@@ -100,15 +103,25 @@ def _domain_from_url(url: str) -> str:
     except Exception:
         return ""
 
+
 def _results_file_ready(output_dir: str, results_file: str) -> bool:
-    """Check results.jsonl exists and non-empty."""
     path = os.path.join(output_dir, results_file)
     return os.path.exists(path) and os.path.getsize(path) > 0
 
+
 # ------------------------------------------------------------------------------------
-# Utilities
+# Storage / Projects
 # ------------------------------------------------------------------------------------
-def load_project_config(manager: StorageManager, project: str) -> dict:
+
+manager = StorageManager(STORAGE_ROOT)
+projects = manager.list_projects()
+
+
+# ------------------------------------------------------------------------------------
+# Config helpers
+# ------------------------------------------------------------------------------------
+
+def load_project_config(project: str) -> dict:
     cfg = manager.get_config(project)
     paths = manager.get_paths(project)
     root = os.path.join(STORAGE_ROOT, project) if not os.path.isabs(paths["root"]) else paths["root"]
@@ -117,6 +130,7 @@ def load_project_config(manager: StorageManager, project: str) -> dict:
     cfg["index_dir"] = index_dir
     cfg["results_file"] = cfg.get("results_file", "results.jsonl")
     return cfg
+
 
 def ensure_chat_payload_shape(payload):
     if isinstance(payload, list):
@@ -132,13 +146,30 @@ def ensure_chat_payload_shape(payload):
     payload["settings"].setdefault("score_threshold", 0.5)
     return payload
 
-def rebuild_pipelines_for_project(manager: StorageManager, project: str):
+
+def rebuild_pipelines_for_project(project: str, api_key: str | None = None):
     if not project or project == "No projects yet":
         return
-    cfg = load_project_config(manager, project)
+    cfg = load_project_config(project)
     os.makedirs(cfg["output_dir"], exist_ok=True)
     os.makedirs(cfg["index_dir"], exist_ok=True)
-    st.session_state.ingest_pipeline, st.session_state.query_pipeline = build_pipelines(cfg)
+    key = api_key or st.session_state.get("user_openai_key")
+    if not key:
+        st.session_state.ingest_pipeline = None
+        st.session_state.query_pipeline = None
+        st.session_state.active_project = project
+        if not st.session_state.get("missing_key_notice"):
+            st.session_state.missing_key_notice = True
+            st.warning("Please add your OpenAI API key in the sidebar to enable chat and indexing.")
+        return
+    st.session_state.missing_key_notice = False
+    try:
+        st.session_state.ingest_pipeline, st.session_state.query_pipeline = build_pipelines(cfg, api_key=key)
+    except RuntimeError as e:
+        st.session_state.ingest_pipeline = None
+        st.session_state.query_pipeline = None
+        st.warning(str(e))
+        return
     st.session_state.active_project = project
     st.session_state.active_chat = None
     st.session_state.chat_payload = {
@@ -147,57 +178,50 @@ def rebuild_pipelines_for_project(manager: StorageManager, project: str):
         "messages": [],
     }
 
-def ensure_project_pipelines(selected_project: str, manager: StorageManager):
+
+def ensure_project_pipelines(selected_project: str):
     if (
         ("active_project" not in st.session_state)
         or (st.session_state.active_project != selected_project)
         or (st.session_state.ingest_pipeline is None)
         or (st.session_state.query_pipeline is None)
     ):
-        rebuild_pipelines_for_project(manager, selected_project)
+        rebuild_pipelines_for_project(
+            selected_project,
+            api_key=st.session_state.get("user_openai_key"),
+        )
 
-# ------------------------------------------------------------------------------------
-# Storage / Projects
-# ------------------------------------------------------------------------------------
-manager = StorageManager(STORAGE_ROOT)
-projects = manager.list_projects()
-
-# ------------------------------------------------------------------------------------
-# Project select on_change callback
-# ------------------------------------------------------------------------------------
-def _on_project_change():
-    proj = st.session_state.get("project_selector")
-    if projects and proj and proj != "No projects yet":
-        rebuild_pipelines_for_project(manager, proj)
-        # reset inline force UI & status when switching projects
-        st.session_state.show_force_options = False
-        st.session_state.last_index_ok = None
-        st.session_state.last_index_msg = ""
 
 # ------------------------------------------------------------------------------------
 # Sidebar
 # ------------------------------------------------------------------------------------
+
 with st.sidebar:
-    st.header("🌐 Webly Projects")
-    st.subheader("🔑 OpenAI")
+    st.title("Webly")
+    st.caption("Website to searchable knowledge base")
+
+    st.subheader("OpenAI")
     current = st.session_state.get("user_openai_key")
     if current:
-        st.success(f"Connected with key {_mask_key(current)}")
+        st.success(f"Connected: {_mask_key(current)}")
         col_a, col_b = st.columns(2)
         with col_a:
             if st.button("Forget key"):
                 st.session_state.user_openai_key = None
                 st.success("Key removed from this session.")
         with col_b:
-            if st.button("Rebuild with this key"):
-                # Rebuild pipelines for the active project (if any) using this key
+            if st.button("Rebuild pipelines"):
                 if st.session_state.get("active_project"):
                     proj = st.session_state.active_project
-                    cfg = load_project_config(manager, proj)
-                    st.session_state.ingest_pipeline, st.session_state.query_pipeline = build_pipelines(cfg, api_key=current)
+                    rebuild_pipelines_for_project(proj, api_key=current)
                     st.success("Pipelines rebuilt.")
     else:
-        k = st.text_input("Paste your OpenAI API key", type="password", placeholder="sk-...", help="Stored in memory for your session only.")
+        k = st.text_input(
+            "Paste API key",
+            type="password",
+            placeholder="sk-...",
+            help="Stored in memory for this session only.",
+        )
         if st.button("Connect"):
             ok, err = _validate_openai_key(k.strip())
             if ok:
@@ -206,20 +230,22 @@ with st.sidebar:
             else:
                 st.error(err or "Could not validate key.")
 
-    # --- New Project ---
-    if st.button("➕ New Project"):
+    st.divider()
+
+    st.subheader("Projects")
+    if st.button("New project"):
         st.session_state.show_new_project_form = True
 
     if st.session_state.get("show_new_project_form", False):
-        with st.expander("Create New Project", expanded=True):
-            new_name = st.text_input("Project Name", key="new_project_name")
+        with st.expander("Create new project", expanded=True):
+            new_name = st.text_input("Project name", key="new_project_name")
             new_url = st.text_input("Start URL", key="new_project_url")
-            new_domains = st.text_area("Allowed Domains (comma-separated)", key="new_project_domains")
-            embed_choice = st.selectbox("Embedding Model", list(EMBEDDER_OPTIONS.keys()), key="new_embed_choice")
+            new_domains = st.text_area("Allowed domains (comma-separated)", key="new_project_domains")
+            embed_choice = st.selectbox("Embedding model", list(EMBEDDER_OPTIONS.keys()), key="new_embed_choice")
 
-            col1, col2 = st.columns([1, 1])
+            col1, col2 = st.columns(2)
             with col1:
-                if st.button("✅ Create", key="create_project_btn"):
+                if st.button("Create", key="create_project_btn"):
                     cfg = {
                         "start_url": new_url,
                         "allowed_domains": [d.strip() for d in new_domains.split(",") if d.strip()],
@@ -229,11 +255,10 @@ with st.sidebar:
                         "score_threshold": 0.5,
                         "crawl_entire_site": True,
                         "results_file": "results.jsonl",
-                        # sensible crawler defaults
                         "allow_subdomains": False,
                         "respect_robots": True,
                         "max_depth": 3,
-                        "rate_limit_delay": 0.0,
+                        "rate_limit_delay": 0.2,
                         "allowed_paths": [],
                         "blocked_paths": [],
                         "allow_url_patterns": [],
@@ -248,512 +273,390 @@ with st.sidebar:
                     manager.create_project(new_name, cfg)
                     st.session_state.show_new_project_form = False
                     st.session_state.project_selector = new_name
-                    rebuild_pipelines_for_project(manager, new_name)
+                    rebuild_pipelines_for_project(new_name)
                     st.rerun()
             with col2:
-                if st.button("❌ Cancel", key="cancel_project_btn"):
+                if st.button("Cancel", key="cancel_project_btn"):
                     st.session_state.show_new_project_form = False
 
-    # --- Project Selector ---
     if projects:
         default_index = 0
         if st.session_state.active_project in projects:
             default_index = projects.index(st.session_state.active_project)
         selected = st.selectbox(
-            "Select Project",
+            "Select project",
             projects,
             index=default_index,
             key="project_selector",
-            on_change=_on_project_change,
         )
     else:
-        selected = st.selectbox("Select Project", ["No projects yet"])
+        selected = st.selectbox("Select project", ["No projects yet"])
 
-    # When a valid project is selected, load its config and ensure pipelines
     if projects and selected not in (None, "No projects yet"):
-        cfg = load_project_config(manager, selected)
-        ensure_project_pipelines(selected, manager)
+        cfg = load_project_config(selected)
+        ensure_project_pipelines(selected)
 
-        # ------- Status badges -------
         ready_idx = _index_dir_ready(cfg["index_dir"])
         ready_res = _results_file_ready(cfg["output_dir"], cfg["results_file"])
         st.caption(
-            f"Results: {'✅ Found' if ready_res else '❌ Missing'}  ·  "
-            f"Index: {'✅ Ready' if ready_idx else '❌ Missing'}"
+            f"Results: {'Ready' if ready_res else 'Missing'}  |  "
+            f"Index: {'Ready' if ready_idx else 'Missing'}"
         )
 
-        # --- Project Settings (organized) ---
-        with st.expander("⚙️ Project Settings", expanded=False):
-            crawl_tab, index_tab, chat_tab = st.tabs(
-                ["Crawling", "Indexing & Embeddings", "Chat & Retrieval"]
-            )
-
-            # ---------- Crawling ----------
-            with crawl_tab:
-                start_url_input = st.text_input("Start URL", cfg.get("start_url", ""))
-
-                allowed_domains_text = ", ".join(cfg.get("allowed_domains", []))
-                allowed_domains_input = st.text_area(
-                    "Allowed Domains (comma-separated)",
-                    allowed_domains_text,
-                    help="If left empty and you choose Entire site, Webly auto-fills from Start URL."
-                )
-
-                crawl_mode = st.radio(
-                    "Crawl scope",
-                    ["Entire site", "Only URLs matching patterns", "Only specific pages"],
-                    index=0 if cfg.get("crawl_entire_site", True) else (2 if cfg.get("seed_urls") else 1),
-                    help="Pick what to crawl."
-                )
-
-                allowed_paths_text = st.text_area(
-                    "Allowed paths (prefixes, comma-separated)",
-                    ", ".join(cfg.get("allowed_paths", []))
-                )
-                blocked_paths_text = st.text_area(
-                    "Blocked paths (prefixes, comma-separated)",
-                    ", ".join(cfg.get("blocked_paths", []))
-                )
-                allow_patterns_text = st.text_area(
-                    "Allow URL patterns (regex, one per line)",
-                    "\n".join(cfg.get("allow_url_patterns", []))
-                )
-                block_patterns_text = st.text_area(
-                    "Block URL patterns (regex, one per line)",
-                    "\n".join(cfg.get("block_url_patterns", []))
-                )
-
-                seed_urls_text = st.text_area(
-                    "Specific pages (one URL per line)",
-                    "\n".join(cfg.get("seed_urls", [])),
-                    help="Used only when 'Only specific pages' is selected."
-                )
-
-                allow_subdomains = st.checkbox("Allow subdomains", value=cfg.get("allow_subdomains", False))
-                respect_robots = st.checkbox("Respect robots.txt", value=cfg.get("respect_robots", True))
-
-                no_depth_limit = st.checkbox(
-                    "No depth limit",
-                    value=(cfg.get("max_depth", 3) in (-1, None)),
-                    help="If enabled, Webly ignores depth checks (sets max_depth = -1)."
-                )
-                if no_depth_limit:
-                    max_depth_val = -1
-                else:
-                    max_depth_val = st.number_input("Max depth", min_value=0, max_value=20, value=int(cfg.get("max_depth", 3)))
-
-                rate_limit_delay = st.number_input(
-                    "Rate limit delay (seconds between requests)",
-                    min_value=0.0, max_value=5.0, value=float(cfg.get("rate_limit_delay", 0.0)), step=0.1
-                )
-
-            # ---------- Indexing & Embeddings ----------
-            with index_tab:
-                reverse_map = {v: k for k, v in EMBEDDER_OPTIONS.items()}
-                current_embed_choice = reverse_map.get(cfg.get("embedding_model"), "HuggingFace (MiniLM)")
-                embed_choice = st.selectbox(
-                    "Embedding Model",
-                    list(EMBEDDER_OPTIONS.keys()),
-                    index=list(EMBEDDER_OPTIONS.keys()).index(current_embed_choice),
-                )
-                # results file is rarely changed; keep it advanced but editable
-                results_file_input = st.text_input(
-                    "Results file (advanced)",
-                    cfg.get("results_file", "results.jsonl")
-                )
-
-            # ---------- Chat & Retrieval ----------
-            with chat_tab:
-                chat_model = st.text_input("Chat Model", cfg.get("chat_model", "gpt-4o-mini"))
-                summary_model = st.text_input("Summary Model (optional)", cfg.get("summary_model", ""))
-                score_threshold = st.slider(
-                    "Default Similarity Threshold", 0.0, 1.0, float(cfg.get("score_threshold", 0.5))
-                )
-
-            # ---- Save row ----
-            col1, col2, col3 = st.columns([1, 1, 1])
-            with col1:
-                if st.button("💾 Save Project Settings"):
-                    # Clean & normalize allowed domains into list
-                    if isinstance(allowed_domains_input, str):
-                        ad_list = [d.strip() for d in allowed_domains_input.split(",") if d.strip()]
-                    else:
-                        ad_list = allowed_domains_input
-
-                    # Auto-fill domains if crawl_entire_site and none provided
-                    auto_msg = ""
-                    if (crawl_mode == "Entire site") and not ad_list:
-                        dom = _domain_from_url(start_url_input)
-                        if dom:
-                            ad_list = [dom]
-                            auto_msg = f"Allowed Domains was empty; auto-set to [{dom}] based on Start URL."
-                        else:
-                            auto_msg = "Start URL missing/invalid; could not auto-set Allowed Domains."
-
-                    cfg_edit = cfg.copy()
-                    # Persist Crawling
-                    cfg_edit["start_url"] = start_url_input
-                    cfg_edit["allowed_domains"] = ad_list
-                    cfg_edit["allowed_paths"] = [p.strip() for p in allowed_paths_text.split(",") if p.strip()]
-                    cfg_edit["blocked_paths"] = [p.strip() for p in blocked_paths_text.split(",") if p.strip()]
-                    cfg_edit["allow_url_patterns"] = [p.strip() for p in allow_patterns_text.splitlines() if p.strip()]
-                    cfg_edit["block_url_patterns"] = [p.strip() for p in block_patterns_text.splitlines() if p.strip()]
-                    cfg_edit["allow_subdomains"] = bool(allow_subdomains)
-                    cfg_edit["respect_robots"] = bool(respect_robots)
-                    cfg_edit["max_depth"] = int(max_depth_val)
-                    cfg_edit["rate_limit_delay"] = float(rate_limit_delay)
-
-                    if crawl_mode == "Entire site":
-                        cfg_edit["crawl_entire_site"] = True
-                        cfg_edit["seed_urls"] = []
-                    elif crawl_mode == "Only URLs matching patterns":
-                        cfg_edit["crawl_entire_site"] = False
-                        cfg_edit["seed_urls"] = []
-                    else:  # Only specific pages
-                        cfg_edit["crawl_entire_site"] = False
-                        cfg_edit["seed_urls"] = [u.strip() for u in seed_urls_text.splitlines() if u.strip()]
-
-                    # Persist Indexing
-                    cfg_edit["embedding_model"] = EMBEDDER_OPTIONS[embed_choice]
-                    cfg_edit["results_file"] = results_file_input
-
-                    # Persist Chat/Retrieval
-                    cfg_edit["chat_model"] = chat_model
-                    cfg_edit["summary_model"] = summary_model
-                    cfg_edit["score_threshold"] = float(score_threshold)
-
-                    # Save + rebuild
-                    manager.save_config(selected, cfg_edit)
-                    rebuild_pipelines_for_project(manager, selected)
-                    if auto_msg:
-                        st.info(auto_msg)
-                    st.success("Settings saved ✅")
-
-            with col2:
-                if st.button("🚀 Run", key=f"run_toggle_{selected}"):
-                        st.session_state.show_force_options = True
-                        st.session_state.last_index_ok = None
-                        st.session_state.last_index_msg = ""
-
-                # # Show options only when the panel is open
-                # if st.session_state.get("show_force_options", False):
-                #     st.markdown("**Select what to run**")
-                #     action = st.radio(
-                #         "Action",
-                #         ["Crawl + Index", "Crawl only", "Index only"],
-                #         index=0,
-                #         key=f"action_{selected}",
-                #     )
-                #     mode_map = {
-                #         "Crawl + Index": "both",
-                #         "Crawl only": "crawl_only",
-                #         "Index only": "index_only",
-                #     }
-                #     mode_val = mode_map[action]
-
-                #     # Force toggle appears only when we crawl
-                #     if mode_val in ("both", "crawl_only"):
-                #         force_crawl = st.checkbox(
-                #             "Force re-crawl (ignore existing results.jsonl)",
-                #             value=False,
-                #             key=f"force_{selected}",
-                #         )
-                #     else:
-                #         force_crawl = False
-
-                #     # Start / Cancel controls
-                #     c1, c2 = st.columns([1, 1])
-                #     with c1:
-                #         start_clicked = st.button("Start", key=f"start_{selected}")
-                #     with c2:
-                #         if st.button("Cancel", key=f"cancel_run_{selected}"):
-                #             st.session_state.show_force_options = False
-                #             st.stop()
-
-                #     # 🚦 Only run when Start is pressed
-                #     if start_clicked:
-                #         rebuild_pipelines_for_project(manager, selected)
-                #         with st.spinner(f"Running: {action} for {selected}..."):
-                #             try:
-                #                 result = st.session_state.ingest_pipeline.run(
-                #                     force_crawl=force_crawl,
-                #                     mode=mode_val
-                #                 )
-
-                #                 # Handled empty-results status from the pipeline
-                #                 if isinstance(result, dict) and result.get("empty_results"):
-                #                     st.info(
-                #                         "No pages were saved for this run.\n\n"
-                #                         f"Checked path: `{result.get('results_path') or 'N/A'}`\n\n"
-                #                         "Possible causes:\n"
-                #                         "- Start URL not within **Allowed Domains**\n"
-                #                         "- Subdomains blocked (enable **Allow subdomains**)\n"
-                #                         "- Patterns/seed URLs too strict\n"
-                #                         "- robots/anti-bot or login wall blocked pages\n"
-                #                         "- JS-only pages (need a renderer)\n\n"
-                #                         + (result.get("message") or "")
-                #                     )
-                #                     if result.get("disallowed_report_path"):
-                #                         st.caption(f"Debug report saved to: {result['disallowed_report_path']}")
-                #                     st.stop()
-
-                #                 # Normal success paths
-                #                 if mode_val in ("both", "index_only"):
-                #                     cfg_after = load_project_config(manager, selected)
-                #                     ok = _index_dir_ready(cfg_after["index_dir"])
-                #                     st.session_state.last_index_ok = ok
-                #                     if ok:
-                #                         st.session_state.last_index_msg = f"Index ready ✓  ({cfg_after['index_dir']})"
-                #                         rebuild_pipelines_for_project(manager, selected)
-                #                         st.success(st.session_state.last_index_msg)
-                #                     else:
-                #                         st.session_state.last_index_msg = (
-                #                             f"Index phase finished, but files not found in:\n{cfg_after['index_dir']}\n"
-                #                             "Ensure your ingest pipeline writes an '.index' and 'metadata.*'."
-                #                         )
-                #                         st.error(st.session_state.last_index_msg)
-
-                #                 elif mode_val == "crawl_only":
-                #                     if _results_file_ready(cfg["output_dir"], cfg["results_file"]):
-                #                         st.success("Crawl complete ✓  (results.jsonl ready)")
-                #                     else:
-                #                         st.info("Crawl finished, but the results file is missing or empty.")
-
-                #             finally:
-                #                 # Always close the panel after an attempt
-                #                 st.session_state.show_force_options = False
-
-
-            with col3:
-                if st.button("🗑️ Delete Project"):
-                    st.session_state.confirm_delete = selected
-        # === Run Panel (rendered outside columns to avoid nested-columns error) ===
-            if st.session_state.get("show_force_options", False):
-                st.divider()
-                st.markdown("### ▶️ Run pipeline")
-
-                action = st.radio(
-                    "Action",
-                    ["Crawl + Index", "Crawl only", "Index only"],
-                    index=0,
-                    key=f"action_{selected}",
-                )
-                mode_map = {
-                    "Crawl + Index": "both",
-                    "Crawl only": "crawl_only",
-                    "Index only": "index_only",
-                }
-                mode_val = mode_map[action]
-
-                # Force only when crawling
-                force_crawl = False
-                if mode_val in ("both", "crawl_only"):
-                    force_crawl = st.checkbox(
-                        "Force re-crawl (ignore existing results.jsonl)",
-                        value=False,
-                        key=f"force_{selected}",
-                    )
-
-                # Start / Cancel side-by-side (now safe, not inside a column)
-                c_start, c_cancel = st.columns([1, 1])
-                with c_start:
-                    start_clicked = st.button("Start", key=f"start_{selected}")
-                with c_cancel:
-                    cancel_clicked = st.button("Cancel", key=f"cancel_run_{selected}")
-
-                if cancel_clicked:
-                    st.session_state.show_force_options = False
-                    st.stop()
-
-                # 🚦 Only runs when Start is pressed
-                if start_clicked:
-                    rebuild_pipelines_for_project(manager, selected)
-                    with st.spinner(f"Running: {action} for {selected}..."):
-                        try:
-                            result = st.session_state.ingest_pipeline.run(
-                                force_crawl=force_crawl, mode=mode_val
-                            )
-
-                            # Handled empty-results status from the pipeline
-                            if isinstance(result, dict) and result.get("empty_results"):
-                                st.info(
-                                    "No pages were saved for this run.\n\n"
-                                    f"Checked path: `{result.get('results_path') or 'N/A'}`\n\n"
-                                    "Possible causes:\n"
-                                    "- Start URL not within **Allowed Domains**\n"
-                                    "- Subdomains blocked (enable **Allow subdomains**)\n"
-                                    "- Patterns/seed URLs too strict\n"
-                                    "- robots/anti-bot or login wall blocked pages\n"
-                                    "- JS-only pages (need a renderer)\n\n"
-                                    + (result.get('message') or "")
-                                )
-                                if result.get("disallowed_report_path"):
-                                    st.caption(f"Debug report saved to: {result['disallowed_report_path']}")
-                                st.session_state.show_force_options = False
-                                st.stop()
-
-                            # Normal success paths
-                            if mode_val in ("both", "index_only"):
-                                cfg_after = load_project_config(manager, selected)
-                                ok = _index_dir_ready(cfg_after["index_dir"])
-                                st.session_state.last_index_ok = ok
-                                if ok:
-                                    st.session_state.last_index_msg = f"Index ready ✓  ({cfg_after['index_dir']})"
-                                    rebuild_pipelines_for_project(manager, selected)
-                                    st.success(st.session_state.last_index_msg)
-                                else:
-                                    st.session_state.last_index_msg = (
-                                        f"Index phase finished, but files not found in:\n{cfg_after['index_dir']}\n"
-                                        "Ensure your ingest pipeline writes an '.index' and 'metadata.*'."
-                                    )
-                                    st.error(st.session_state.last_index_msg)
-
-                            else:  # crawl_only
-                                # use the existing cfg from this expander scope
-                                if _results_file_ready(cfg["output_dir"], cfg["results_file"]):
-                                    st.success("Crawl complete ✓  (results.jsonl ready)")
-                                else:
-                                    st.info("Crawl finished, but the results file is missing or empty.")
-
-                        finally:
-                            # Close panel after attempt
-                            st.session_state.show_force_options = False
-
-        # Delete confirmation UI
-        if st.session_state.get("confirm_delete") == selected:
-            with st.expander(f"Confirm delete '{selected}'?", expanded=True):
-                dc1, dc2 = st.columns([1, 1])
-                with dc1:
-                    if st.button("Yes, delete"):
-                        manager.delete_project(selected)
-                        st.session_state.confirm_delete = None
-                        if st.session_state.active_project == selected:
-                            st.session_state.active_project = None
-                            st.session_state.ingest_pipeline = None
-                            st.session_state.query_pipeline = None
-                            st.session_state.chat_payload = {"title": None, "settings": {"score_threshold": 0.5}, "messages": []}
-                            st.session_state.active_chat = None
-                        st.rerun()
-                with dc2:
-                    if st.button("Cancel"):
-                        st.session_state.confirm_delete = None
-                        st.rerun()
-
-        # --- Chats Section ---
-        st.markdown("### 💬 Chats")
-        chats = manager.list_chats(selected)
-        active = st.session_state.get("active_chat")
-
-        if st.button("＋ New Chat", use_container_width=True):
-            base, idx = "Chat", 1
-            new_name = f"{base} {idx}"
-            while new_name in chats:
-                idx += 1
-                new_name = f"{base} {idx}"
-            st.session_state.active_chat = new_name
-            st.session_state.chat_payload = {
-                "title": new_name,
-                "settings": {"score_threshold": cfg.get("score_threshold", 0.5)},
-                "messages": [],
-            }
-            manager.save_chat(selected, new_name, st.session_state.chat_payload)
-            st.rerun()
-
-        for chat_name in chats:
-            is_active = (chat_name == active)
-            with st.container():
-                c1, c2, c3 = st.columns([6, 1, 1])
-                with c1:
-                    if st.button(
-                        f"💬 {chat_name}" + (" ✅" if is_active else ""),
-                        key=f"sel_{chat_name}",
-                        use_container_width=True,
-                    ):
-                        st.session_state.active_chat = chat_name
-                        payload = manager.load_chat(selected, chat_name)
-                        st.session_state.chat_payload = ensure_chat_payload_shape(payload)
-                        st.rerun()
-                with c2:
-                    if st.button("📝", key=f"rn_{chat_name}", help="Rename chat"):
-                        currently_open = st.session_state.get("rename_chat_open", None)
-                        st.session_state.rename_chat_open = None if currently_open == chat_name else chat_name
-                        st.rerun()
-                with c3:
-                    if st.button("🗑️", key=f"del_{chat_name}", help="Delete chat"):
-                        manager.delete_chat(selected, chat_name)
-                        if st.session_state.get("active_chat") == chat_name:
-                            st.session_state.active_chat = None
-                            st.session_state.chat_payload = {
-                                "title": None,
-                                "settings": {"score_threshold": 0.5},
-                                "messages": [],
-                            }
-                        st.rerun()
-
-                if st.session_state.get("rename_chat_open") == chat_name:
-                    rn_col1, rn_col2 = st.columns([3, 1])
-                    with rn_col1:
-                        new_title = st.text_input("New name", value=chat_name, key=f"rn_input_{chat_name}")
-                    with rn_col2:
-                        if st.button("Save", key=f"rn_save_{chat_name}"):
-                            manager.rename_chat(selected, chat_name, new_title)
-                            if st.session_state.get("active_chat") == chat_name:
-                                st.session_state.active_chat = new_title
-                                st.session_state.chat_payload["title"] = new_title
-                            st.session_state.rename_chat_open = None
-                            st.rerun()
 
 # ------------------------------------------------------------------------------------
-# Main Area: Chat
+# Main layout
 # ------------------------------------------------------------------------------------
+
 if projects and st.session_state.get("active_project"):
     current_project = st.session_state.active_project
+    cfg = load_project_config(current_project)
+
     st.title(f"Webly — {current_project}")
 
-    payload = st.session_state.get("chat_payload", {"messages": []})
-    payload = ensure_chat_payload_shape(payload)
+    tabs = st.tabs(["Overview", "Run", "Chat", "Settings"])
 
-    # Render existing messages
-    for msg in payload["messages"]:
-        st.chat_message(msg["role"]).write(msg["content"])
+    # -------------------- Overview --------------------
+    with tabs[0]:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Start URL", cfg.get("start_url", ""))
+        with col2:
+            st.metric("Embedding", cfg.get("embedding_model", ""))
+        with col3:
+            st.metric("Chat model", cfg.get("chat_model", ""))
 
-    if st.session_state.get("active_chat"):
-        user_input = st.chat_input("Message Webly…")
-        if user_input:
-            payload["messages"].append({"role": "user", "content": user_input})
-            ensure_project_pipelines(current_project, manager)
-            cfg_cur = load_project_config(manager, current_project)
+        ready_idx = _index_dir_ready(cfg["index_dir"])
+        ready_res = _results_file_ready(cfg["output_dir"], cfg["results_file"])
+        status = "Ready" if (ready_idx and ready_res) else "Not ready"
+        st.info(f"Pipeline status: {status}")
 
-            if not _index_dir_ready(cfg_cur["index_dir"]):
-                assistant_reply = (
-                    "No index found on disk for this project. "
-                    "Please run indexing first (sidebar → ⚙️ Project Settings → 🚀 Run)."
-                )
-            else:
-                db = st.session_state.ingest_pipeline.db
-                if getattr(db, "index", None) is None:
-                    try:
-                        db.load(cfg_cur["index_dir"])
-                    except Exception as e:
-                        assistant_reply = f"Failed to load index from disk: {e}"
+        st.write("Use the Run tab to crawl and index. Use Chat to ask questions.")
+
+    # -------------------- Run --------------------
+    with tabs[1]:
+        st.subheader("Run pipeline")
+        action = st.radio(
+            "Action",
+            ["Crawl + Index", "Crawl only", "Index only"],
+            index=0,
+            horizontal=True,
+        )
+        mode_map = {
+            "Crawl + Index": "both",
+            "Crawl only": "crawl_only",
+            "Index only": "index_only",
+        }
+        mode_val = mode_map[action]
+
+        force_crawl = False
+        if mode_val in ("both", "crawl_only"):
+            force_crawl = st.checkbox(
+                "Force re-crawl (ignore existing results.jsonl)",
+                value=False,
+            )
+
+        c1, c2 = st.columns(2)
+        with c1:
+            start_clicked = st.button("Start")
+        with c2:
+            if st.button("Delete project"):
+                st.session_state.confirm_delete = current_project
+
+        if start_clicked:
+            rebuild_pipelines_for_project(current_project)
+            if st.session_state.ingest_pipeline is None:
+                st.warning("Please add your OpenAI API key in the sidebar to run indexing.")
+                st.stop()
+            progress = st.progress(0)
+            status = st.empty()
+
+            def _progress_cb(current, total, url):
+                if total and total > 0:
+                    progress.progress(min(current / total, 1.0))
+                    status.caption(f"Indexing {current}/{total}: {url}")
+                else:
+                    status.caption(f"Indexing {current}: {url}")
+
+            st.session_state.ingest_pipeline.progress_callback = _progress_cb
+            with st.spinner(f"Running: {action} for {current_project}..."):
+                try:
+                    result = st.session_state.ingest_pipeline.run(
+                        force_crawl=force_crawl, mode=mode_val
+                    )
+
+                    if isinstance(result, dict) and result.get("empty_results"):
+                        st.warning(
+                            "No pages were saved. Possible causes: start URL not within allowed domains, "
+                            "robots blocking, patterns too strict, or JS-only pages."
+                        )
+                        if result.get("disallowed_report_path"):
+                            st.caption(f"Debug report saved to: {result['disallowed_report_path']}")
+                    else:
+                        if mode_val in ("both", "index_only"):
+                            ok = _index_dir_ready(cfg["index_dir"])
+                            if ok:
+                                st.success(f"Index ready at: {cfg['index_dir']}")
+                            else:
+                                st.error("Indexing finished but index files are missing.")
+                        else:
+                            if _results_file_ready(cfg["output_dir"], cfg["results_file"]):
+                                st.success("Crawl complete. Results file ready.")
+                            else:
+                                st.warning("Crawl finished, but results file is missing or empty.")
+                finally:
+                    st.session_state.show_run_panel = False
+                    progress.empty()
+                    status.empty()
+
+        if st.session_state.get("confirm_delete") == current_project:
+            st.warning(f"Confirm delete '{current_project}'?")
+            dc1, dc2 = st.columns(2)
+            with dc1:
+                if st.button("Yes, delete"):
+                    manager.delete_project(current_project)
+                    st.session_state.confirm_delete = None
+                    st.session_state.active_project = None
+                    st.session_state.ingest_pipeline = None
+                    st.session_state.query_pipeline = None
+                    st.session_state.chat_payload = {"title": None, "settings": {"score_threshold": 0.5}, "messages": []}
+                    st.session_state.active_chat = None
+                    st.rerun()
+            with dc2:
+                if st.button("Cancel"):
+                    st.session_state.confirm_delete = None
+                    st.rerun()
+
+    # -------------------- Chat --------------------
+    with tabs[2]:
+        chats = manager.list_chats(current_project)
+        active = st.session_state.get("active_chat")
+
+        col_a, col_b = st.columns([3, 1])
+        with col_a:
+            st.subheader("Chats")
+        with col_b:
+            if st.button("New chat"):
+                base, idx = "Chat", 1
+                new_name = f"{base} {idx}"
+                while new_name in chats:
+                    idx += 1
+                    new_name = f"{base} {idx}"
+                st.session_state.active_chat = new_name
+                st.session_state.chat_payload = {
+                    "title": new_name,
+                    "settings": {"score_threshold": cfg.get("score_threshold", 0.5)},
+                    "messages": [],
+                }
+                manager.save_chat(current_project, new_name, st.session_state.chat_payload)
+                st.rerun()
+
+        for chat_name in chats:
+            is_active = chat_name == active
+            label = f"{chat_name}" + (" (active)" if is_active else "")
+            c1, c2 = st.columns([5, 1])
+            with c1:
+                if st.button(label, key=f"sel_{chat_name}"):
+                    st.session_state.active_chat = chat_name
+                    payload = manager.load_chat(current_project, chat_name)
+                    st.session_state.chat_payload = ensure_chat_payload_shape(payload)
+                    st.rerun()
+            with c2:
+                if st.button("Delete", key=f"del_{chat_name}"):
+                    manager.delete_chat(current_project, chat_name)
+                    if st.session_state.get("active_chat") == chat_name:
+                        st.session_state.active_chat = None
+                        st.session_state.chat_payload = {
+                            "title": None,
+                            "settings": {"score_threshold": 0.5},
+                            "messages": [],
+                        }
+                    st.rerun()
+
+        st.divider()
+
+        payload = ensure_chat_payload_shape(st.session_state.get("chat_payload", {"messages": []}))
+        for msg in payload["messages"]:
+            st.chat_message(msg["role"]).write(msg["content"])
+
+        if st.session_state.get("active_chat"):
+            user_input = st.chat_input("Message Webly...")
+            if user_input:
+                payload["messages"].append({"role": "user", "content": user_input})
+                ensure_project_pipelines(current_project)
+                cfg_cur = load_project_config(current_project)
+
+                if st.session_state.query_pipeline is None:
+                    assistant_reply = "Please add your OpenAI API key in the sidebar to enable chat."
+                elif not _index_dir_ready(cfg_cur["index_dir"]):
+                    assistant_reply = (
+                        "No index found. Please run indexing first in the Run tab."
+                    )
+                else:
+                    db = st.session_state.ingest_pipeline.db
+                    if getattr(db, "index", None) is None:
+                        try:
+                            db.load(cfg_cur["index_dir"])
+                        except Exception as e:
+                            assistant_reply = f"Failed to load index: {e}"
+                        else:
+                            try:
+                                assistant_reply = st.session_state.query_pipeline.query(user_input)
+                            except Exception as e:
+                                assistant_reply = f"Query failed: {e}"
                     else:
                         try:
                             assistant_reply = st.session_state.query_pipeline.query(user_input)
                         except Exception as e:
-                            assistant_reply = f"Query failed after loading index: {e}"
-                else:
-                    try:
-                        assistant_reply = st.session_state.query_pipeline.query(user_input)
-                    except Exception as e:
-                        assistant_reply = f"Query failed: {e}"
+                            assistant_reply = f"Query failed: {e}"
 
-            payload["messages"].append({"role": "assistant", "content": assistant_reply})
-            st.session_state.chat_payload = payload
-            manager.save_chat(current_project, st.session_state.active_chat, payload)
-            st.chat_message("user").write(user_input)
-            st.chat_message("assistant").write(assistant_reply)
-    else:
-        st.info("Start a new chat from the sidebar.")
+                payload["messages"].append({"role": "assistant", "content": assistant_reply})
+                st.session_state.chat_payload = payload
+                manager.save_chat(current_project, st.session_state.active_chat, payload)
+                st.chat_message("user").write(user_input)
+                st.chat_message("assistant").write(assistant_reply)
+        else:
+            st.info("Create or select a chat to start.")
+
+    # -------------------- Settings --------------------
+    with tabs[3]:
+        st.subheader("Project settings")
+        crawl_tab, index_tab, chat_tab = st.tabs(["Crawling", "Indexing", "Chat"])
+
+        with crawl_tab:
+            start_url_input = st.text_input("Start URL", cfg.get("start_url", ""))
+
+            allowed_domains_text = ", ".join(cfg.get("allowed_domains", []))
+            allowed_domains_input = st.text_area(
+                "Allowed domains (comma-separated)",
+                allowed_domains_text,
+                help="If left empty and you choose Entire site, Webly auto-fills from Start URL.",
+            )
+
+            crawl_mode = st.radio(
+                "Crawl scope",
+                ["Entire site", "Only URLs matching patterns", "Only specific pages"],
+                index=0 if cfg.get("crawl_entire_site", True) else (2 if cfg.get("seed_urls") else 1),
+            )
+
+            allowed_paths_text = st.text_area(
+                "Allowed paths (prefixes, comma-separated)",
+                ", ".join(cfg.get("allowed_paths", [])),
+            )
+            blocked_paths_text = st.text_area(
+                "Blocked paths (prefixes, comma-separated)",
+                ", ".join(cfg.get("blocked_paths", [])),
+            )
+            allow_patterns_text = st.text_area(
+                "Allow URL patterns (regex, one per line)",
+                "\n".join(cfg.get("allow_url_patterns", [])),
+            )
+            block_patterns_text = st.text_area(
+                "Block URL patterns (regex, one per line)",
+                "\n".join(cfg.get("block_url_patterns", [])),
+            )
+
+            seed_urls_text = st.text_area(
+                "Specific pages (one URL per line)",
+                "\n".join(cfg.get("seed_urls", [])),
+                help="Used only when 'Only specific pages' is selected.",
+            )
+
+            allow_subdomains = st.checkbox("Allow subdomains", value=cfg.get("allow_subdomains", False))
+            respect_robots = st.checkbox("Respect robots.txt", value=cfg.get("respect_robots", True))
+
+            no_depth_limit = st.checkbox(
+                "No depth limit",
+                value=(cfg.get("max_depth", 3) in (-1, None)),
+            )
+            if no_depth_limit:
+                max_depth_val = -1
+            else:
+                max_depth_val = st.number_input(
+                    "Max depth", min_value=0, max_value=20, value=int(cfg.get("max_depth", 3))
+                )
+
+            rate_limit_delay = st.number_input(
+                "Rate limit delay (seconds between requests)",
+                min_value=0.0,
+                max_value=5.0,
+                value=float(cfg.get("rate_limit_delay", 0.2)),
+                step=0.1,
+            )
+
+        with index_tab:
+            reverse_map = {v: k for k, v in EMBEDDER_OPTIONS.items()}
+            current_embed_choice = reverse_map.get(cfg.get("embedding_model"), "HuggingFace (MiniLM)")
+            embed_choice = st.selectbox(
+                "Embedding model",
+                list(EMBEDDER_OPTIONS.keys()),
+                index=list(EMBEDDER_OPTIONS.keys()).index(current_embed_choice),
+            )
+            results_file_input = st.text_input(
+                "Results file (advanced)",
+                cfg.get("results_file", "results.jsonl"),
+            )
+
+        with chat_tab:
+            chat_model = st.text_input("Chat model", cfg.get("chat_model", "gpt-4o-mini"))
+            summary_model = st.text_input("Summary model (optional)", cfg.get("summary_model", ""))
+            score_threshold = st.slider(
+                "Default similarity threshold",
+                0.0,
+                1.0,
+                float(cfg.get("score_threshold", 0.5)),
+            )
+
+        if st.button("Save settings"):
+            if isinstance(allowed_domains_input, str):
+                ad_list = [d.strip() for d in allowed_domains_input.split(",") if d.strip()]
+            else:
+                ad_list = allowed_domains_input
+
+            auto_msg = ""
+            if (crawl_mode == "Entire site") and not ad_list:
+                dom = _domain_from_url(start_url_input)
+                if dom:
+                    ad_list = [dom]
+                    auto_msg = f"Allowed domains was empty; auto-set to [{dom}] based on Start URL."
+                else:
+                    auto_msg = "Start URL missing/invalid; could not auto-set Allowed Domains."
+
+            cfg_edit = cfg.copy()
+            cfg_edit["start_url"] = start_url_input
+            cfg_edit["allowed_domains"] = ad_list
+            cfg_edit["allowed_paths"] = [p.strip() for p in allowed_paths_text.split(",") if p.strip()]
+            cfg_edit["blocked_paths"] = [p.strip() for p in blocked_paths_text.split(",") if p.strip()]
+            cfg_edit["allow_url_patterns"] = [p.strip() for p in allow_patterns_text.splitlines() if p.strip()]
+            cfg_edit["block_url_patterns"] = [p.strip() for p in block_patterns_text.splitlines() if p.strip()]
+            cfg_edit["allow_subdomains"] = bool(allow_subdomains)
+            cfg_edit["respect_robots"] = bool(respect_robots)
+            cfg_edit["max_depth"] = int(max_depth_val)
+            cfg_edit["rate_limit_delay"] = float(rate_limit_delay)
+
+            if crawl_mode == "Entire site":
+                cfg_edit["crawl_entire_site"] = True
+                cfg_edit["seed_urls"] = []
+            elif crawl_mode == "Only URLs matching patterns":
+                cfg_edit["crawl_entire_site"] = False
+                cfg_edit["seed_urls"] = []
+            else:
+                cfg_edit["crawl_entire_site"] = False
+                cfg_edit["seed_urls"] = [u.strip() for u in seed_urls_text.splitlines() if u.strip()]
+
+            cfg_edit["embedding_model"] = EMBEDDER_OPTIONS[embed_choice]
+            cfg_edit["results_file"] = results_file_input
+
+            cfg_edit["chat_model"] = chat_model
+            cfg_edit["summary_model"] = summary_model
+            cfg_edit["score_threshold"] = float(score_threshold)
+
+            manager.save_config(current_project, cfg_edit)
+            rebuild_pipelines_for_project(current_project)
+            if auto_msg:
+                st.info(auto_msg)
+            st.success("Settings saved.")
+
 else:
     st.title("Webly")
     st.info("Create or select a project from the sidebar to get started.")

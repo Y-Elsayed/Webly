@@ -10,7 +10,10 @@ WORKDIR /app
 
 # Install Python deps first (better Docker cache)
 COPY requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements-ml.txt ./requirements-ml.txt
+ARG INSTALL_ML=false
+RUN pip install --no-cache-dir -r requirements.txt \
+ && if [ "$INSTALL_ML" = "true" ]; then pip install --no-cache-dir -r requirements-ml.txt; fi
 
 # Copy the project
 # If your code lives in a subfolder, copy the repo root and set WORKDIR below.
@@ -22,7 +25,7 @@ ENV STREAMLIT_SERVER_PORT=8501 \
     PYTHONUNBUFFERED=1
 
 # Work from the folder that contains app.py
-WORKDIR /app/Webly
+WORKDIR /app
 
 # (Optional) Pre-pull the default embedding model to warm cache
 # RUN python - <<'PY'

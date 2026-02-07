@@ -1,4 +1,4 @@
-# embedder/openai_embedder.py
+﻿# embedder/openai_embedder.py
 import os
 from typing import List
 from embedder.base_embedder import Embedder
@@ -19,14 +19,32 @@ class OpenAIEmbedder(Embedder):
 
         self.client = OpenAI(api_key=self.api_key)
 
-        # Dimension sizes (hardcoded since OpenAI doesn’t expose this directly)
+        # Dimension sizes (hardcoded since OpenAI doesnâ€™t expose this directly)
         if model_name == "text-embedding-3-small":
             self.dim = 1536
+            self.max_input_tokens = 7000
+            self.safety_ratio = 0.8
         elif model_name == "text-embedding-3-large":
             self.dim = 3072
+            self.max_input_tokens = 7000
+            self.safety_ratio = 0.8
         else:
             # fallback
-            self.dim = 1536  
+            self.dim = 1536
+            self.max_input_tokens = 7000
+            self.safety_ratio = 0.8
+
+    def count_tokens(self, text: str) -> int:
+        """
+        Best-effort token counter to help pre-chunking.
+        Falls back to a rough char heuristic if tiktoken isn't available.
+        """
+        try:
+            import tiktoken
+            enc = tiktoken.get_encoding("cl100k_base")
+            return len(enc.encode(text))
+        except Exception:
+            return max(1, len(text) // 4)
 
     def embed(self, text: str) -> List[float]:
         """
