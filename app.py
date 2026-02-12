@@ -167,13 +167,15 @@ def ensure_chat_payload_shape(payload):
     return payload
 
 
-def build_memory_context(messages, max_chars: int = 2000) -> str:
+def build_memory_context(messages, max_chars: int = 2000, leave_last_k: int = 0) -> str:
     """
     Build a compact memory string from the most recent chat messages.
     Includes roles and truncates to a character budget.
     """
     if not messages:
         return ""
+    if leave_last_k and leave_last_k > 0:
+        messages = messages[-(leave_last_k * 2) :]
     buf = []
     total = 0
     # Walk backwards, then reverse for chronological order
@@ -289,6 +291,9 @@ with st.sidebar:
                         "chat_model": "gpt-4o-mini",
                         "summary_model": "",
                         "score_threshold": 0.5,
+                        "retrieval_mode": "builder",
+                        "builder_max_rounds": 1,
+                        "leave_last_k": 2,
                         "crawl_entire_site": True,
                         "results_file": "results.jsonl",
                         "allow_subdomains": False,
@@ -557,7 +562,11 @@ if projects and st.session_state.get("active_project"):
                             assistant_reply = f"Failed to load index: {e}"
                         else:
                             try:
-                                memory_ctx = build_memory_context(payload["messages"][:-1], max_chars=2000)
+                                memory_ctx = build_memory_context(
+                                    payload["messages"][:-1],
+                                    max_chars=2000,
+                                    leave_last_k=int(cfg_cur.get("leave_last_k", 0) or 0),
+                                )
                                 assistant_reply = st.session_state.query_pipeline.query(
                                     user_input, memory_context=memory_ctx
                                 )
@@ -565,7 +574,11 @@ if projects and st.session_state.get("active_project"):
                                 assistant_reply = f"Query failed: {e}"
                     else:
                         try:
-                            memory_ctx = build_memory_context(payload["messages"][:-1], max_chars=2000)
+                            memory_ctx = build_memory_context(
+                                payload["messages"][:-1],
+                                max_chars=2000,
+                                leave_last_k=int(cfg_cur.get("leave_last_k", 0) or 0),
+                            )
                             assistant_reply = st.session_state.query_pipeline.query(
                                 user_input, memory_context=memory_ctx
                             )
@@ -710,6 +723,27 @@ if projects and st.session_state.get("active_project"):
                 1.0,
                 float(cfg.get("score_threshold", 0.5)),
             )
+            retrieval_mode = st.selectbox(
+                "Retrieval mode",
+                ["classic", "builder"],
+                index=0 if str(cfg.get("retrieval_mode", "builder")) == "classic" else 1,
+                help="classic: existing flow. builder: concept-aware context building with limited follow-up searches.",
+            )
+            builder_max_rounds = st.number_input(
+                "Builder max rounds",
+                min_value=0,
+                max_value=3,
+                value=int(cfg.get("builder_max_rounds", 1)),
+                help="How many follow-up retrieval rounds builder mode can run.",
+                disabled=(retrieval_mode == "classic"),
+            )
+            leave_last_k = st.number_input(
+                "Leave last K Q/A pairs in memory (0 = default)",
+                min_value=0,
+                max_value=20,
+                value=int(cfg.get("leave_last_k", 2)),
+                help="When >0, memory context includes only the last K user+assistant pairs.",
+            )
 
         if st.button("Save settings"):
             if isinstance(allowed_domains_input, str):
@@ -754,6 +788,9 @@ if projects and st.session_state.get("active_project"):
             cfg_edit["chat_model"] = chat_model
             cfg_edit["summary_model"] = summary_model
             cfg_edit["score_threshold"] = float(score_threshold)
+            cfg_edit["retrieval_mode"] = retrieval_mode
+            cfg_edit["builder_max_rounds"] = int(builder_max_rounds)
+            cfg_edit["leave_last_k"] = int(leave_last_k)
 
             manager.save_config(current_project, cfg_edit)
             rebuild_pipelines_for_project(current_project)
