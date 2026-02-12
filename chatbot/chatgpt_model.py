@@ -11,6 +11,8 @@ class ChatGPTModel(Chatbot):
 
     def generate(self, prompt: str) -> str:
         response = self.client.chat.completions.create(
-            model=self.model, messages=[{"role": "user", "content": prompt}], temperature=0.9
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
         )
         return response.choices[0].message.content.strip()
