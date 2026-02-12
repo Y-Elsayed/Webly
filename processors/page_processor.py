@@ -13,15 +13,7 @@ class PageProcessor:
             return []
 
         chunks = self.chunker.chunk_html(text)
-        return [
-            {
-                "url": url,
-                "chunk_index": i,
-                "text": chunk,
-                "length": len(chunk)
-            }
-            for i, chunk in enumerate(chunks)
-        ]
+        return [{"url": url, "chunk_index": i, "text": chunk, "length": len(chunk)} for i, chunk in enumerate(chunks)]
 
 
 class SemanticPageProcessor:
@@ -34,7 +26,7 @@ class SemanticPageProcessor:
         IMPORTANT: pass the raw HTML to the chunker so we can keep structure (headings/anchors).
         The extractor can still be used for other signals if needed.
         """
-        extracted = self.extractor(url, html)  # you can still use extracted["text"] if you want
+        self.extractor(url, html)  # preserve compatibility if extractor has side effects
         # Use raw HTML here to preserve headings/anchors
         chunks = self.chunker.chunk_html(html, url)
         return [
@@ -46,9 +38,7 @@ class SemanticPageProcessor:
                 # carry structural metadata forward
                 "hierarchy": ch.get("hierarchy", []),
                 "outgoing_links": ch.get("outgoing_links", []),
-                "id": ch.get("id")  # deterministic id for graph joins
+                "id": ch.get("id"),  # deterministic id for graph joins
             }
             for i, ch in enumerate(chunks)
         ]
-
-

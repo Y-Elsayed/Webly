@@ -1,5 +1,7 @@
-from chatbot.base_chatbot import Chatbot
 from openai import OpenAI
+
+from chatbot.base_chatbot import Chatbot
+
 
 class ChatGPTModel(Chatbot):
     def __init__(self, api_key: str, model: str = "gpt-3.5-turbo"):
@@ -9,8 +11,6 @@ class ChatGPTModel(Chatbot):
 
     def generate(self, prompt: str) -> str:
         response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.9
+            model=self.model, messages=[{"role": "user", "content": prompt}], temperature=0.9
         )
         return response.choices[0].message.content.strip()

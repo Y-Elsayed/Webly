@@ -1,8 +1,10 @@
-﻿# embedder/openai_embedder.py
+# embedder/openai_embedder.py
 import os
 from typing import List
-from embedder.base_embedder import Embedder
+
 from openai import OpenAI
+
+from embedder.base_embedder import Embedder
 
 
 class OpenAIEmbedder(Embedder):
@@ -41,6 +43,7 @@ class OpenAIEmbedder(Embedder):
         """
         try:
             import tiktoken
+
             enc = tiktoken.get_encoding("cl100k_base")
             return len(enc.encode(text))
         except Exception:
@@ -52,10 +55,7 @@ class OpenAIEmbedder(Embedder):
         """
         if not text.strip():
             return []
-        resp = self.client.embeddings.create(
-            model=self.model_name,
-            input=text
-        )
+        resp = self.client.embeddings.create(model=self.model_name, input=text)
         return resp.data[0].embedding
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
@@ -65,8 +65,5 @@ class OpenAIEmbedder(Embedder):
         texts = [t for t in texts if t.strip()]
         if not texts:
             return []
-        resp = self.client.embeddings.create(
-            model=self.model_name,
-            input=texts
-        )
+        resp = self.client.embeddings.create(model=self.model_name, input=texts)
         return [item.embedding for item in resp.data]

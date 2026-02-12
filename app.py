@@ -1,21 +1,17 @@
-﻿import os
-import sys
+import os
 from urllib.parse import urlparse
 
 import streamlit as st
 from openai import OpenAI
+
+from main import build_pipelines
+from storage.storage_manager import StorageManager
 
 # ------------------------------------------------------------------------------------
 # Paths & imports
 # ------------------------------------------------------------------------------------
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STORAGE_ROOT = os.path.join(APP_DIR, "websites_storage")
-
-# Ensure local imports work when running "streamlit run app.py"
-sys.path.append(os.path.abspath(os.path.join(APP_DIR, "..")))
-
-from main import build_pipelines
-from storage.storage_manager import StorageManager
 
 # ------------------------------------------------------------------------------------
 # Page
@@ -47,6 +43,7 @@ st.markdown(
 # ------------------------------------------------------------------------------------
 # Session State
 # ------------------------------------------------------------------------------------
+
 
 def _init_state():
     defaults = {
@@ -142,6 +139,7 @@ projects = manager.list_projects()
 # ------------------------------------------------------------------------------------
 # Config helpers
 # ------------------------------------------------------------------------------------
+
 
 def load_project_config(project: str) -> dict:
     cfg = manager.get_config(project)
@@ -344,8 +342,7 @@ with st.sidebar:
         ready_idx = _index_dir_ready(cfg["index_dir"])
         ready_res = _results_file_ready(cfg["output_dir"], cfg["results_file"])
         st.caption(
-            f"Results: {'Ready' if ready_res else 'Missing'}  |  "
-            f"Index: {'Ready' if ready_idx else 'Missing'}"
+            f"Results: {'Ready' if ready_res else 'Missing'}  |  " f"Index: {'Ready' if ready_idx else 'Missing'}"
         )
 
 
@@ -426,9 +423,7 @@ if projects and st.session_state.get("active_project"):
             st.session_state.ingest_pipeline.progress_callback = _progress_cb
             with st.spinner(f"Running: {action} for {current_project}..."):
                 try:
-                    result = st.session_state.ingest_pipeline.run(
-                        force_crawl=force_crawl, mode=mode_val
-                    )
+                    result = st.session_state.ingest_pipeline.run(force_crawl=force_crawl, mode=mode_val)
 
                     if isinstance(result, dict) and result.get("empty_results"):
                         st.warning(
@@ -464,7 +459,11 @@ if projects and st.session_state.get("active_project"):
                     st.session_state.active_project = None
                     st.session_state.ingest_pipeline = None
                     st.session_state.query_pipeline = None
-                    st.session_state.chat_payload = {"title": None, "settings": {"score_threshold": 0.5}, "messages": []}
+                    st.session_state.chat_payload = {
+                        "title": None,
+                        "settings": {"score_threshold": 0.5},
+                        "messages": [],
+                    }
                     st.session_state.active_chat = None
                     st.rerun()
             with dc2:
@@ -552,9 +551,7 @@ if projects and st.session_state.get("active_project"):
                 if st.session_state.query_pipeline is None:
                     assistant_reply = "Please add your OpenAI API key in the sidebar to enable chat."
                 elif not _index_dir_ready(cfg_cur["index_dir"]):
-                    assistant_reply = (
-                        "No index found. Please run indexing first in the Run tab."
-                    )
+                    assistant_reply = "No index found. Please run indexing first in the Run tab."
                 else:
                     db = st.session_state.ingest_pipeline.db
                     if getattr(db, "index", None) is None:

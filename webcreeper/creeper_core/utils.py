@@ -1,5 +1,6 @@
 import os
-from logging import StreamHandler, FileHandler, Formatter, getLogger, INFO
+from logging import INFO, FileHandler, Formatter, StreamHandler, getLogger
+
 
 def configure_logging(module_name: str, log_file: str = "./log/crawler.log"):
     """
@@ -14,16 +15,16 @@ def configure_logging(module_name: str, log_file: str = "./log/crawler.log"):
     if not logger.handlers:
         # StreamHandler for console output
         stream_handler = StreamHandler()
-        stream_formatter = Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        stream_formatter = Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
         stream_handler.setFormatter(stream_formatter)
-        
+
         # FileHandler for file output
         file_handler = FileHandler(log_file)
-        file_formatter = Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        file_formatter = Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
         file_handler.setFormatter(file_formatter)
 
         logger.addHandler(stream_handler)
         logger.addHandler(file_handler)
-    
+
     logger.setLevel(INFO)
     return logger

@@ -1,8 +1,12 @@
-from urllib.parse import urljoin, urlparse, urlunparse
+import hashlib
+import os
+import re
+from urllib.parse import urljoin, urlparse
+
 from bs4 import BeautifulSoup
 from creeper_core.base_agent import BaseAgent
-from creeper_core.storage import save_jsonl_line, save_json
-import os, hashlib, re
+from creeper_core.storage import save_json, save_jsonl_line
+
 
 class Atlas(BaseAgent):
     DEFAULT_SETTINGS = {
@@ -12,7 +16,7 @@ class Atlas(BaseAgent):
         "max_depth": 3,
         "allowed_domains": [],
         "allowed_paths": [],
-        "allow_url_patterns": [],      # regex patterns (optional allow-list)
+        "allow_url_patterns": [],  # regex patterns (optional allow-list)
         "blocked_paths": [],
         "storage_path": "./data",
         "crawl_entire_website": False,
@@ -21,8 +25,8 @@ class Atlas(BaseAgent):
         "heuristic_skip_long_urls": True,
         "heuristic_skip_state_param": True,
         "deduplicate_content": True,
-        "allow_subdomains": False,     # exact host by default
-        "seed_urls": [],               # crawl only these pages when not full-site
+        "allow_subdomains": False,  # exact host by default
+        "seed_urls": [],  # crawl only these pages when not full-site
     }
 
     def __init__(self, settings: dict = {}):
@@ -31,9 +35,7 @@ class Atlas(BaseAgent):
         self.max_depth = self.settings["max_depth"]
         self.crawl_entire_website = self.settings["crawl_entire_website"]
 
-        self.results_path = os.path.join(
-            self.settings["storage_path"], self.settings["results_filename"]
-        )
+        self.results_path = os.path.join(self.settings["storage_path"], self.settings["results_filename"])
         os.makedirs(self.settings["storage_path"], exist_ok=True)
 
         # Track seen content hashes
@@ -386,7 +388,6 @@ class Atlas(BaseAgent):
                     seen_frontier.add(target)
                     frontier.append(target)
 
-
     def extract_links(self, page_content: str, base_url: str, page_id=None) -> list:
         soup = BeautifulSoup(page_content, "html.parser")
         links = []
@@ -402,11 +403,13 @@ class Atlas(BaseAgent):
                 continue
             seen.add(full_url)
 
-            links.append({
-                "target": full_url,
-                "anchor_text": anchor.get_text(strip=True),
-                "source_chunk": f"{page_id}_chunk_{i}" if page_id is not None else f"chunk_{i}"
-            })
+            links.append(
+                {
+                    "target": full_url,
+                    "anchor_text": anchor.get_text(strip=True),
+                    "source_chunk": f"{page_id}_chunk_{i}" if page_id is not None else f"chunk_{i}",
+                }
+            )
             i += 1
 
         return links

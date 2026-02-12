@@ -1,5 +1,6 @@
-import os
 import json
+import os
+
 
 def save_jsonl_line(path: str, data: dict):
     """
@@ -9,6 +10,7 @@ def save_jsonl_line(path: str, data: dict):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(data, ensure_ascii=False) + "\n")
+
 
 def save_json(path: str, data: dict | list):
     """
