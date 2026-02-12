@@ -15,6 +15,8 @@ This roadmap is organized by Webly components and split into:
 
 ### Next
 - Improve overall UI quality (layout consistency, clarity of actions/states, better empty/error states)
+- Add an onboarding wizard for first-time setup (env, model choice, first project)
+- Add a guided install flow (step-by-step checks with clear success/failure states)
 - Add quick in-app diagnostics panel (index status, last crawl stats)
 - Add chat/source export from UI
 - Improve error messages for crawl policy misconfiguration
@@ -134,3 +136,17 @@ This roadmap is organized by Webly components and split into:
 ### Later
 - Release automation (tag + notes workflow)
 - Optional coverage reporting in CI
+
+## Documentation and Adoption
+### Done
+- Core README with quick-start and development commands
+
+### Next
+- Improve documentation depth for both developers and non-technical users
+- Add a dedicated non-technical user guide (what to click, what to expect, common errors)
+- Add screenshot/GIF walkthroughs (project creation -> crawl/index -> chat)
+- Add troubleshooting docs for common setup/runtime failures
+
+### Later
+- Publish versioned docs site
+- Add video walkthroughs and template use-case playbooks
