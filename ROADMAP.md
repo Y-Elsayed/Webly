@@ -14,13 +14,31 @@ This roadmap is organized by Webly components and split into:
 - Dockerized app run path
 
 ### Next
+- Improve overall UI quality (layout consistency, clarity of actions/states, better empty/error states)
 - Add quick in-app diagnostics panel (index status, last crawl stats)
 - Add chat/source export from UI
 - Improve error messages for crawl policy misconfiguration
 
 ### Later
-- Split `app.py` into modules (`ui/projects.py`, `ui/run.py`, `ui/chat.py`, `ui/settings.py`)
+- Split the large `app.py` script into modular UI components
+  (`ui/projects.py`, `ui/run.py`, `ui/chat.py`, `ui/settings.py`, shared state/helpers)
 - Multi-user auth and project sharing
+
+## API Service Layer (non-UI usage)
+### Done
+- Core pipelines are importable and callable from Python modules
+
+### Next
+- Add a lightweight FastAPI service exposing core operations:
+  - `POST /projects`
+  - `POST /projects/{id}/crawl`
+  - `POST /projects/{id}/index`
+  - `POST /projects/{id}/query`
+  - `GET /projects/{id}/status`
+
+### Later
+- Async/background jobs for long-running crawl/index tasks
+- Auth/rate limiting for hosted API mode
 
 ## Crawling (`webcreeper/`, `crawl/`)
 ### Done
