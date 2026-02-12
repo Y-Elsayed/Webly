@@ -36,6 +36,18 @@ Windows PowerShell alternative:
 Copy-Item .env.example .env
 ```
 
+## Run with Docker
+```bash
+docker compose up --build -d
+```
+
+Open in browser:
+- `http://localhost:8501`
+
+Note:
+- Container logs may show `http://0.0.0.0:8501`. That is expected inside Docker.
+- From your machine, always use `http://localhost:8501`.
+
 ## Configuration
 Create/update a project in the UI, or use a config with keys like:
 - `start_url`, `allowed_domains`
