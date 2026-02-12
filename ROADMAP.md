@@ -84,6 +84,8 @@ This roadmap is organized by Webly components and split into:
 - Answerability/fallback behavior
 
 ### Next
+- Improve query understanding so retrieval can better parse user intent and reformulate searches
+- Add stronger reasoning-aware retrieval steps for ambiguous or multi-part questions
 - Source citation quality improvements
 - Query evaluation harness (gold questions + metrics)
 - Retrieval cache for repeated queries
@@ -94,15 +96,18 @@ This roadmap is organized by Webly components and split into:
 
 ## Embeddings and Vector Store (`embedder/`, `vector_index/`)
 ### Done
-- Hugging Face and OpenAI embedders
+- OpenAI-focused API-backed embedding/chat integration
 - FAISS backend with metadata persistence
 - Deterministic ID behavior for stored records
 
 ### Next
 - Explicit migration/version metadata for index files
 - Better index health checks in runtime flow
+- Add provider wrappers for additional model APIs (beyond OpenAI)
 
 ### Later
+- Expand first-class support for open-source/local model providers
+  (embedding and chat wrappers)
 - Qdrant adapter
 - Milvus adapter
 - Backend comparison benchmarks (latency/recall/cost)

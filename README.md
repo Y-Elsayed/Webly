@@ -4,6 +4,9 @@
 
 Webly is a modular website-to-RAG framework. It crawls websites, extracts and chunks content, embeds it, stores vectors, and provides a chat/search interface over that knowledge.
 
+Current provider note:
+- API-backed model integration is currently OpenAI-focused (`OPENAI_API_KEY`).
+
 ## What It Does
 - Crawl websites with policy controls (domains, depth, robots, URL filters)
 - Build `results.jsonl` and a site `graph.json`
@@ -67,6 +70,7 @@ See `CONTRIBUTING.md`.
 
 ## Roadmap (High Level)
 See `ROADMAP.md` for a component-by-component plan with `Done`, `Next`, and `Later`.
+Key near-term focus includes better user-intent parsing and reasoning-aware retrieval quality.
 
 ## Community and Policies
 - Contributing: `CONTRIBUTING.md`
