@@ -4,6 +4,8 @@ from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+from chatbot.context_builder_agent import ContextBuilderAgent
+
 
 class QueryPipeline:
     """
@@ -35,6 +37,8 @@ class QueryPipeline:
         anchor_boost: float = 0.10,  # boost for results sourced via anchor/backlink expansion
         section_boost: float = 0.05,  # mild boost for same-section/sibling expansion
         debug: bool = False,
+        retrieval_mode: str = "builder",
+        builder_max_rounds: int = 1,
     ):
         self.chat_agent = chat_agent
         self.recrawl_fn = recrawl_fn
@@ -54,6 +58,9 @@ class QueryPipeline:
         self.anchor_boost = anchor_boost
         self.section_boost = section_boost
         self.debug = debug
+        self.retrieval_mode = retrieval_mode
+        self.builder_max_rounds = max(0, int(builder_max_rounds))
+        self.context_builder = ContextBuilderAgent(planner_llm=getattr(self.chat_agent, "chatbot", None))
 
         # Hybrid retrieval (BM25) cache
         self._bm25_ready = False
@@ -68,6 +75,9 @@ class QueryPipeline:
 
     # ---------------- Core entrypoint ----------------
     def query(self, question: str, retry_on_empty: bool = False, memory_context: str = "") -> str:
+        if (self.retrieval_mode or "classic").lower() == "builder":
+            return self._query_builder(question, retry_on_empty=retry_on_empty, memory_context=memory_context)
+
         if self.debug:
             print(f"\n[DEBUG] User query: {question}")
             if memory_context:
@@ -178,6 +188,123 @@ class QueryPipeline:
         # If we still can't answer confidently, return a natural fallback with helpful links
         if self.allow_best_effort and combined:
             return self.chat_agent.answer(question_for_answer, context)
+        return self._fallback_message(combined, question_for_answer)
+
+    def _query_builder(self, question: str, retry_on_empty: bool = False, memory_context: str = "") -> str:
+        if self.debug:
+            print(f"\n[DEBUG] [builder] User query: {question}")
+            if memory_context:
+                print(f"[DEBUG] [builder] Memory context length: {len(memory_context)} chars")
+
+        route = self.context_builder.plan_initial_route(question=question, memory_context=memory_context)
+        route_mode = str(route.get("mode") or "retrieve_new")
+        standalone_query = str(route.get("standalone_query") or "").strip()
+        concepts = route.get("concepts") if isinstance(route.get("concepts"), list) else []
+
+        if self.debug:
+            print(
+                f"[DEBUG] [builder] Route mode={route_mode}, "
+                f"standalone_query={standalone_query}, concepts={concepts}"
+            )
+
+        if route_mode == "transform_only":
+            prior = (memory_context or "").strip()
+            if not prior:
+                return "I don't have enough prior conversation context to transform yet."
+            prompt = (
+                "You are transforming a prior answer. Follow the user's instruction exactly.\n"
+                "Do not add new facts that are not present in prior context.\n\n"
+                f"Instruction: {question}\n\n"
+                f"Prior context:\n{prior}"
+            )
+            transformed = (self.chat_agent.chatbot.generate(prompt) or "").strip()
+            if transformed:
+                return transformed
+            return "I couldn't transform the previous response from the available memory."
+
+        if route_mode == "retrieve_followup":
+            question_for_search = standalone_query or question
+            question_for_answer = f"{memory_context}\nUser: {question}".strip() if memory_context else question
+        else:
+            # retrieve_new: intentionally ignore memory for retrieval and answering.
+            question_for_search = question
+            question_for_answer = question
+
+        initial_results = self._search(question_for_search, self.top_k_first_pass, tag="initial")
+        if self.debug:
+            print(
+                f"[DEBUG] [builder] Initial results ({len(initial_results)}): "
+                f"{[r.get('id') for r in initial_results]}"
+            )
+
+        if retry_on_empty and not initial_results and self.recrawl_fn:
+            try:
+                self.chat_agent.logger.info("[QueryPipeline] No context found. Triggering re-crawl.")
+            except Exception:
+                pass
+            self.recrawl_fn()
+            initial_results = self._search(question_for_search, self.top_k_first_pass, tag="initial-after-recrawl")
+
+        if not initial_results:
+            return self._fallback_message([], question)
+
+        saved_results: List[Dict[str, Any]] = []
+        saved_results.extend(initial_results)
+
+        if not concepts:
+            concepts = self.context_builder.extract_concepts(question_for_search)
+        if self.debug:
+            print(f"[DEBUG] [builder] Concepts: {concepts}")
+
+        # Minimal builder loop: request targeted searches only for missing concepts.
+        coverage = self.context_builder.coverage_report(concepts, saved_results)
+        for i in range(self.builder_max_rounds):
+            coverage = self.context_builder.coverage_report(concepts, saved_results)
+            missing = coverage.get("missing") or []
+            if self.debug:
+                print(f"[DEBUG] [builder] Round {i + 1} coverage: covered={coverage.get('covered')} missing={missing}")
+            if not missing:
+                break
+            decision = self.context_builder.decide_followups(question_for_search, missing, saved_results)
+            drop_ids = set(decision.get("drop_chunk_ids") or [])
+            if drop_ids:
+                saved_results = [
+                    r
+                    for r in saved_results
+                    if (r.get("id") or f"{r.get('url', '')}#chunk_{r.get('chunk_index', -1)}") not in drop_ids
+                ]
+            extra_queries = decision.get("queries") or []
+            if self.debug:
+                print(
+                    f"[DEBUG] [builder] Round {i + 1} decision: "
+                    f"queries={extra_queries}, drop_chunk_ids={list(drop_ids)}"
+                )
+            if not extra_queries:
+                break
+            for q in extra_queries:
+                saved_results.extend(self._search(q, self.top_k_second_pass, tag="builder-followup"))
+
+        combined = self._combine_and_rerank(saved_results)[: self.max_results_to_consider]
+        context = self._assemble_context(combined, max_chars=self._compute_budget_chars(question))
+        coverage = self.context_builder.coverage_report(concepts, combined)
+        if self.debug:
+            print(f"[DEBUG] [builder] Context length: {len(context)} chars")
+            print(
+                f"[DEBUG] [builder] Final coverage: "
+                f"covered={coverage.get('covered')} missing={coverage.get('missing')}"
+            )
+
+        if self.enable_answerability_check and self.chat_agent._judge_answerability(question_for_answer, context):
+            return self.chat_agent.answer(question_for_answer, context)
+
+        if self.allow_best_effort and combined:
+            return self._best_effort_with_links(
+                question_for_answer=question_for_answer,
+                context=context,
+                concepts=concepts,
+                coverage=coverage,
+                results=combined,
+            )
         return self._fallback_message(combined, question_for_answer)
 
     # ---------------- Helpers ----------------
@@ -516,3 +643,87 @@ class QueryPipeline:
             "I couldn't find enough information on this site to answer that directly. "
             "These pages may help:\n" + "\n".join(links)
         )
+
+    def _best_effort_with_links(
+        self,
+        question_for_answer: str,
+        context: str,
+        concepts: List[str],
+        coverage: Dict[str, List[str]],
+        results: List[Dict[str, Any]],
+    ) -> str:
+        """
+        Best-effort response when context is partially relevant but not fully answerable.
+        Includes explicit uncertainty + concept-oriented links for follow-up reading.
+        """
+        missing = coverage.get("missing") or []
+        covered = coverage.get("covered") or []
+
+        if missing:
+            guided_question = (
+                f"{question_for_answer}\n\n"
+                "Instruction: Use only the provided website context.\n"
+                "Never add external knowledge.\n"
+                "If information is missing, explicitly say it is not covered in the documentation.\n"
+                f"Missing concepts detected: {', '.join(missing)}"
+            )
+            base_answer = self.chat_agent.answer(guided_question, context).strip()
+        else:
+            base_answer = self.chat_agent.answer(question_for_answer, context).strip()
+
+        link_targets = missing if missing else covered or concepts
+        link_map = self._helpful_links_by_concept(link_targets, results)
+
+        lines = []
+        if link_map:
+            lines.append("Read more:")
+            for concept, urls in link_map.items():
+                lines.append(f"- {concept}: {', '.join(urls)}")
+        else:
+            lines.append("Read more:")
+            for u in self._top_distinct_urls(results, limit=3):
+                lines.append(f"- {u}")
+
+        return f"{base_answer}\n\n" + "\n".join(lines)
+
+    def _helpful_links_by_concept(
+        self, concepts: List[str], results: List[Dict[str, Any]], max_links_per_concept: int = 2
+    ) -> Dict[str, List[str]]:
+        out: Dict[str, List[str]] = {}
+        if not concepts:
+            return out
+
+        for concept in concepts[:4]:
+            needle = (concept or "").strip().lower()
+            if not needle:
+                continue
+
+            links = []
+            seen = set()
+            for r in results[:20]:
+                url = r.get("url") or r.get("source")
+                if not url or url in seen:
+                    continue
+                text = (r.get("text") or "").lower()
+                hierarchy = " ".join(r.get("hierarchy") or []).lower()
+                if needle in text or needle in hierarchy or needle in url.lower():
+                    seen.add(url)
+                    links.append(url)
+                if len(links) >= max_links_per_concept:
+                    break
+            if links:
+                out[concept] = links
+        return out
+
+    def _top_distinct_urls(self, results: List[Dict[str, Any]], limit: int = 3) -> List[str]:
+        links = []
+        seen = set()
+        for r in results:
+            url = r.get("url") or r.get("source")
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            links.append(url)
+            if len(links) >= limit:
+                break
+        return links

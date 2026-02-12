@@ -96,6 +96,9 @@ def build_pipelines(config, api_key: str | None = None):
         query_pipeline = QueryPipeline(
             chat_agent=agent,
             debug=bool(config.get("query_debug", True)),
+            allow_best_effort=True,
+            retrieval_mode=str(config.get("retrieval_mode", "builder")),
+            builder_max_rounds=int(config.get("builder_max_rounds", 1)),
         )
 
     return ingest_pipeline, query_pipeline
