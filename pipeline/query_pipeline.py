@@ -34,7 +34,7 @@ class QueryPipeline:
         top_k_second_pass: Optional[int] = None,  # for rewrite/expansion passes
         anchor_boost: float = 0.10,  # boost for results sourced via anchor/backlink expansion
         section_boost: float = 0.05,  # mild boost for same-section/sibling expansion
-        debug: bool = True,
+        debug: bool = False,
     ):
         self.chat_agent = chat_agent
         self.recrawl_fn = recrawl_fn

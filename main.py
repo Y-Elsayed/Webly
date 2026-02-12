@@ -17,8 +17,6 @@ from vector_index.faiss_db import FaissDatabase
 def build_pipelines(config, api_key: str | None = None):
     load_dotenv()
     API_KEY = api_key or os.getenv("OPENAI_API_KEY")
-    if not API_KEY:
-        raise RuntimeError("Missing OPENAI_API_KEY")
 
     # ---- normalize defaults ----
     emb = (config.get("embedding_model") or "").strip()
@@ -32,7 +30,12 @@ def build_pipelines(config, api_key: str | None = None):
         config["chat_model"] = chat
 
     # ---- embedder auto-detect ----
-    if emb.startswith("openai:"):
+    uses_openai_embedder = emb.startswith("openai:")
+    uses_summary = bool(config.get("summary_model"))
+
+    if uses_openai_embedder:
+        if not API_KEY:
+            raise RuntimeError("Missing OPENAI_API_KEY (required for OpenAI embeddings).")
         from embedder.openai_embedder import OpenAIEmbedder
 
         embedder = OpenAIEmbedder(model_name=emb.split(":", 1)[1], api_key=API_KEY)
@@ -42,10 +45,14 @@ def build_pipelines(config, api_key: str | None = None):
         embedder = HFSentenceEmbedder(emb)
 
     db = FaissDatabase()
-    chatbot = ChatGPTModel(api_key=API_KEY, model=config.get("chat_model", "gpt-4o-mini"))
+    chatbot = None
+    if API_KEY:
+        chatbot = ChatGPTModel(api_key=API_KEY, model=config.get("chat_model", "gpt-4o-mini"))
 
     summarizer = None
-    if config.get("summary_model"):
+    if uses_summary:
+        if not API_KEY:
+            raise RuntimeError("Missing OPENAI_API_KEY (required for summarization).")
         from processors.text_summarizer import TextSummarizer
 
         summary_llm = ChatGPTModel(api_key=API_KEY, model=config["summary_model"])
@@ -83,7 +90,9 @@ def build_pipelines(config, api_key: str | None = None):
         debug=True,
     )
 
-    agent = WeblyChatAgent(embedder, db, chatbot)
-    query_pipeline = QueryPipeline(chat_agent=agent)
+    query_pipeline = None
+    if chatbot is not None:
+        agent = WeblyChatAgent(embedder, db, chatbot)
+        query_pipeline = QueryPipeline(chat_agent=agent)
 
     return ingest_pipeline, query_pipeline
