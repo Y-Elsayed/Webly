@@ -54,11 +54,7 @@ ruff check .
 See `CONTRIBUTING.md`.
 
 ## Roadmap (High Level)
-- Async/resumable crawling
-- Retrieval evaluation harness
-- Better reranking/citations
-- Additional vector stores (Qdrant/Milvus)
-- App modularization and export features
+See `ROADMAP.md` for a component-by-component plan with `Done`, `Next`, and `Later`.
 
 ## Community and Policies
 - Contributing: `CONTRIBUTING.md`
