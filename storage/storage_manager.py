@@ -25,17 +25,18 @@ class StorageManager:
         os.makedirs(p["root"], exist_ok=True)
         os.makedirs(p["index"], exist_ok=True)
         os.makedirs(p["chats"], exist_ok=True)
-        with open(p["config"], "w") as f:
+        with open(p["config"], "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2)
 
     def get_config(self, project: str) -> dict:
         p = self.get_paths(project)
-        with open(p["config"], "r") as f:
+        # utf-8-sig tolerates BOM and plain UTF-8.
+        with open(p["config"], "r", encoding="utf-8-sig") as f:
             return json.load(f)
 
     def save_config(self, project: str, cfg: dict):
         p = self.get_paths(project)
-        with open(p["config"], "w") as f:
+        with open(p["config"], "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2)
 
     def delete_project(self, project: str):
@@ -51,7 +52,7 @@ class StorageManager:
         fp = os.path.join(self.get_paths(project)["chats"], f"{chat_name}.json")
         if not os.path.exists(fp):
             return {"title": chat_name, "settings": {"score_threshold": 0.5}, "messages": []}
-        with open(fp, "r") as f:
+        with open(fp, "r", encoding="utf-8-sig") as f:
             try:
                 data = json.load(f)
             except json.JSONDecodeError:
@@ -75,7 +76,7 @@ class StorageManager:
     def save_chat(self, project: str, chat_name: str, payload: dict):
         fp = os.path.join(self.get_paths(project)["chats"], f"{chat_name}.json")
         os.makedirs(os.path.dirname(fp), exist_ok=True)
-        with open(fp, "w") as f:
+        with open(fp, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
 
     def delete_chat(self, project: str, chat_name: str):
