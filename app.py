@@ -197,15 +197,6 @@ def rebuild_pipelines_for_project(project: str, api_key: str | None = None):
     os.makedirs(cfg["output_dir"], exist_ok=True)
     os.makedirs(cfg["index_dir"], exist_ok=True)
     key = api_key or st.session_state.get("user_openai_key")
-    if not key:
-        st.session_state.ingest_pipeline = None
-        st.session_state.query_pipeline = None
-        st.session_state.active_project = project
-        if not st.session_state.get("missing_key_notice"):
-            st.session_state.missing_key_notice = True
-            st.warning("Please add your OpenAI API key in the sidebar to enable chat and indexing.")
-        return
-    st.session_state.missing_key_notice = False
     try:
         st.session_state.ingest_pipeline, st.session_state.query_pipeline = build_pipelines(cfg, api_key=key)
     except RuntimeError as e:
@@ -213,6 +204,7 @@ def rebuild_pipelines_for_project(project: str, api_key: str | None = None):
         st.session_state.query_pipeline = None
         st.warning(str(e))
         return
+    st.session_state.missing_key_notice = not bool(key)
     st.session_state.active_project = project
     st.session_state.active_chat = None
     st.session_state.chat_payload = {
@@ -223,11 +215,12 @@ def rebuild_pipelines_for_project(project: str, api_key: str | None = None):
 
 
 def ensure_project_pipelines(selected_project: str):
+    has_key = bool(st.session_state.get("user_openai_key"))
     if (
         ("active_project" not in st.session_state)
         or (st.session_state.active_project != selected_project)
         or (st.session_state.ingest_pipeline is None)
-        or (st.session_state.query_pipeline is None)
+        or (has_key and st.session_state.query_pipeline is None)
     ):
         rebuild_pipelines_for_project(
             selected_project,
@@ -408,7 +401,10 @@ if projects and st.session_state.get("active_project"):
         if start_clicked:
             rebuild_pipelines_for_project(current_project)
             if st.session_state.ingest_pipeline is None:
-                st.warning("Please add your OpenAI API key in the sidebar to run indexing.")
+                st.warning(
+                    "Pipeline build failed. Add an OpenAI API key for chat/OpenAI features, "
+                    "or use a non-OpenAI embedding model for local indexing."
+                )
                 st.stop()
             progress = st.progress(0)
             status = st.empty()

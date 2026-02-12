@@ -31,6 +31,11 @@ cp .env.example .env
 streamlit run app.py
 ```
 
+Windows PowerShell alternative:
+```powershell
+Copy-Item .env.example .env
+```
+
 ## Configuration
 Create/update a project in the UI, or use a config with keys like:
 - `start_url`, `allowed_domains`
