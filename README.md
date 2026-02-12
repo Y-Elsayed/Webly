@@ -1,6 +1,6 @@
 # 🌐 Webly — Give Your Website a Voice
 
-![CI](https://github.com/your_username/webly/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/Y-Elsayed/webly/actions/workflows/ci.yml/badge.svg)
 
 **Webly** is a modular, GenAI-powered web crawling and knowledge extraction framework. It transforms any website into a structured, searchable knowledge base — enabling intelligent search, chatbots, and Retrieval-Augmented Generation (RAG) pipelines.
 
@@ -179,3 +179,4 @@ Built with ☕ by [Yassin Ali](mailto:yelsayed003@gmail.com)
 - Never commit API keys or secrets. Use `.env` locally and keep it out of git.
 - Webly defaults to respecting `robots.txt` and uses a small request delay. You can override these,
   but you are responsible for complying with site terms, local laws, and ethical scraping practices.
+
