@@ -1,7 +1,8 @@
-import os
 import json
+import os
 import re
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+
 from embedder.base_embedder import Embedder
 from vector_index.vector_db import VectorDatabase
 
@@ -14,7 +15,7 @@ class EmbedAndStorePipeline:
         results_path: str,
         index_path: str,
         embedding_field: str = "text",
-        batch_size: int = 100
+        batch_size: int = 100,
     ):
         """
         A lightweight pipeline to embed existing processed results and store them in a vector DB.
@@ -64,7 +65,10 @@ class EmbedAndStorePipeline:
                 for seg_idx, part in enumerate(parts):
                     embedding = self.embedder.embed(part)
                     if embedding is None:
-                        print(f"[EmbedAndStorePipeline] Skipping record at line {line_num} seg {seg_idx} - embedding failed.")
+                        print(
+                            "[EmbedAndStorePipeline] Skipping record at "
+                            f"line {line_num} seg {seg_idx} - embedding failed."
+                        )
                         continue
 
                     record_to_store = {
@@ -86,7 +90,6 @@ class EmbedAndStorePipeline:
                         self.db.add(buffer)
                         buffer.clear()
 
-
                 # Flush in batches
                 if len(buffer) >= self.batch_size:
                     self.db.add(buffer)
@@ -98,8 +101,8 @@ class EmbedAndStorePipeline:
 
         self.db.save(self.index_path)
         print(f"[EmbedAndStorePipeline] Saved index to: {self.index_path}")
-        
-       # --- token-safe embedding helpers ---
+
+    # --- token-safe embedding helpers ---
     def _max_input_tokens(self) -> int:
         # Try to read from embedder if available; otherwise default 8192
         for attr in ("max_input_tokens", "max_tokens", "context_size", "max_seq_len"):

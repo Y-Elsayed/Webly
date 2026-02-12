@@ -4,6 +4,7 @@ class HTMLSaver:
     Returns metadata with the URL, HTML content, and character length.
     Skips pages with missing or empty HTML content.
     """
+
     def __call__(self, url: str, html: str) -> dict:
         if not url or not isinstance(url, str):
             return {}
@@ -15,8 +16,4 @@ class HTMLSaver:
         if not html.strip():
             return {}
 
-        return {
-            "url": url,
-            "html": html,
-            "length": len(html)
-        }
+        return {"url": url, "html": html, "length": len(html)}

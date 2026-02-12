@@ -1,8 +1,9 @@
-from typing import Optional, Dict, Any, List, Tuple, Union, Callable
-from urllib.parse import urlparse, parse_qsl, urlunparse, urlencode
-from collections import defaultdict
 import math
 import re
+from collections import defaultdict
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
 
 class QueryPipeline:
     """
@@ -46,8 +47,8 @@ class QueryPipeline:
         self.allow_best_effort = allow_best_effort
 
         self.max_context_chars = max_context_chars
-        self.top_k_first_pass = top_k_first_pass or max( self.chat_agent.top_k, 8 )
-        self.top_k_second_pass =top_k_second_pass or max( self.chat_agent.top_k, 10 )
+        self.top_k_first_pass = top_k_first_pass or max(self.chat_agent.top_k, 8)
+        self.top_k_second_pass = top_k_second_pass or max(self.chat_agent.top_k, 10)
         self.max_results_to_consider = max(max_results_to_consider, 40)
 
         self.anchor_boost = anchor_boost
@@ -210,7 +211,7 @@ class QueryPipeline:
         for r in results[:8]:
             if r.get("hierarchy"):
                 hints.append(" > ".join(r["hierarchy"]))
-            for inc in (r.get("metadata", {}).get("incoming_links") or []):
+            for inc in r.get("metadata", {}).get("incoming_links") or []:
                 if inc.get("anchor_text"):
                     hints.append(inc["anchor_text"])
         return [h for h in hints if h]
@@ -310,8 +311,7 @@ class QueryPipeline:
         parent_limited = []
         for r in combined:
             meta = r.get("metadata") or {}
-            parent = meta.get("chunk_id") or meta.get("parent_id") \
-                    or (r.get("url") or r.get("source") or "")
+            parent = meta.get("chunk_id") or meta.get("parent_id") or (r.get("url") or r.get("source") or "")
             cnt = by_parent.get(parent, 0)
             if cnt >= max_per_parent:
                 continue
@@ -319,7 +319,7 @@ class QueryPipeline:
             parent_limited.append(r)
 
         # --- Stage B: cap per canonical URL (collapse ?page=1/2, utm_* etc.)
-        max_per_canon = 1   # usually 1 is ideal; set 2 if pagination genuinely differs
+        max_per_canon = 1  # usually 1 is ideal; set 2 if pagination genuinely differs
         seen_canon = {}
         canon_limited = []
         for r in parent_limited:
@@ -341,7 +341,7 @@ class QueryPipeline:
             return
         docs = []
         doc_ids = []
-        for rec in (self.chat_agent.vector_db.metadata or []):
+        for rec in self.chat_agent.vector_db.metadata or []:
             text = rec.get("text") or rec.get("summary") or ""
             if not text:
                 continue
@@ -402,16 +402,24 @@ class QueryPipeline:
             rec["_score_bm25"] = float(score)
             hits.append(rec)
         return hits
-    
+
     def _normalize_for_dedupe(self, url: str) -> str:
         try:
             u = urlparse(url)
             drop = {
-                "utm_source","utm_medium","utm_campaign","utm_term","utm_content",
-                "fbclid","gclid","ref","ref_src","ref_url","page"
+                "utm_source",
+                "utm_medium",
+                "utm_campaign",
+                "utm_term",
+                "utm_content",
+                "fbclid",
+                "gclid",
+                "ref",
+                "ref_src",
+                "ref_url",
+                "page",
             }
-            kept = [(k, v) for k, v in parse_qsl(u.query, keep_blank_values=True)
-                    if k.lower() not in drop]
+            kept = [(k, v) for k, v in parse_qsl(u.query, keep_blank_values=True) if k.lower() not in drop]
             kept.sort()
             scheme = (u.scheme or "https").lower()
             netloc = (u.netloc or "").lower()

@@ -1,7 +1,9 @@
-from bs4 import BeautifulSoup, Tag
-from typing import List, Dict, Tuple
 import hashlib
 import re
+from typing import Dict, List, Tuple
+
+from bs4 import BeautifulSoup, Tag
+
 
 class SlidingTextChunker:
     def __init__(self, max_words: int = 350, overlap: int = 50):
@@ -95,7 +97,7 @@ class SlidingTextChunker:
             # update path to this level
             text = self._text(h)
             if curr_lvl - 1 <= len(path):
-                path = path[:curr_lvl - 1]
+                path = path[: curr_lvl - 1]
             # ensure parents exist up to level-1
             while len(path) < curr_lvl - 1:
                 path.append("")  # missing parent heading
@@ -139,20 +141,22 @@ class SlidingTextChunker:
             text = " ".join(window_words).strip()
             tokens = len(window_words)
             chunk_id = self._hash_id(url, hierarchy, section_chunks_idx)
-            chunks.append({
-                "id": chunk_id,
-                "url": url,
-                "text": text,
-                "tokens": tokens,
-                "hierarchy": hierarchy[:],
-                "outgoing_links": window_anchors[:]  # anchors inside this chunk
-            })
+            chunks.append(
+                {
+                    "id": chunk_id,
+                    "url": url,
+                    "text": text,
+                    "tokens": tokens,
+                    "hierarchy": hierarchy[:],
+                    "outgoing_links": window_anchors[:],  # anchors inside this chunk
+                }
+            )
             section_chunks_idx += 1
             # prepare overlap from end of window
             if self.overlap > 0 and len(window_words) > self.overlap:
-                trailing_words = window_words[-self.overlap:]
+                trailing_words = window_words[-self.overlap :]
                 # we cannot precisely trim anchors by word offset here; keep last window anchors
-                trailing_anchors = window_anchors[-max(1, min(len(window_anchors), 3)):]
+                trailing_anchors = window_anchors[-max(1, min(len(window_anchors), 3)) :]
             else:
                 trailing_words, trailing_anchors = [], []
             window_words, window_anchors = [], []
@@ -200,14 +204,16 @@ class SlidingTextChunker:
             full_text = body.get_text(separator=" ", strip=True)
             if full_text:
                 tokens = len(full_text.split())
-                all_chunks.append({
-                    "id": self._hash_id(url, [], 0),
-                    "url": url,
-                    "text": full_text,
-                    "tokens": tokens,
-                    "hierarchy": [],
-                    "outgoing_links": []
-                })
+                all_chunks.append(
+                    {
+                        "id": self._hash_id(url, [], 0),
+                        "url": url,
+                        "text": full_text,
+                        "tokens": tokens,
+                        "hierarchy": [],
+                        "outgoing_links": [],
+                    }
+                )
 
         return all_chunks
 

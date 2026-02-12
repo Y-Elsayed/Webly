@@ -1,7 +1,9 @@
 from abc import ABC, abstractmethod
-from typing import List, Dict
+from typing import Dict, List
 
-# I created this file in case I (or hopefully someone else, since it's open source) need to implement different vector databases in the future.
+# Base interface for vector DB backends, so additional implementations can
+# be added without changing pipeline code.
+
 
 class VectorDatabase(ABC):
     """

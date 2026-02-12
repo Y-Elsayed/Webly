@@ -1,5 +1,6 @@
 import os
 import sys
+
 from dotenv import load_dotenv
 
 # keep your existing path setup (if needed)
@@ -7,10 +8,10 @@ sys.path.append(os.path.abspath("webcreeper"))
 
 from chatbot.chatgpt_model import ChatGPTModel
 from chatbot.webly_chat_agent import WeblyChatAgent
-from pipeline.query_pipeline import QueryPipeline
-from pipeline.ingest_pipeline import IngestPipeline
-from vector_index.faiss_db import FaissDatabase
 from crawl.crawler import Crawler
+from pipeline.ingest_pipeline import IngestPipeline
+from pipeline.query_pipeline import QueryPipeline
+from vector_index.faiss_db import FaissDatabase
 
 
 def build_pipelines(config, api_key: str | None = None):
@@ -33,9 +34,11 @@ def build_pipelines(config, api_key: str | None = None):
     # ---- embedder auto-detect ----
     if emb.startswith("openai:"):
         from embedder.openai_embedder import OpenAIEmbedder
+
         embedder = OpenAIEmbedder(model_name=emb.split(":", 1)[1], api_key=API_KEY)
     else:
         from embedder.hf_sentence_embedder import HFSentenceEmbedder
+
         embedder = HFSentenceEmbedder(emb)
 
     db = FaissDatabase()
@@ -44,6 +47,7 @@ def build_pipelines(config, api_key: str | None = None):
     summarizer = None
     if config.get("summary_model"):
         from processors.text_summarizer import TextSummarizer
+
         summary_llm = ChatGPTModel(api_key=API_KEY, model=config["summary_model"])
         summarizer = TextSummarizer(
             llm=summary_llm,

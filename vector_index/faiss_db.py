@@ -1,10 +1,12 @@
-from .vector_db import VectorDatabase
-from typing import List, Dict, Optional
+import hashlib
+import os
+import pickle
+from typing import Dict, List, Optional
+
 import faiss
 import numpy as np
-import pickle
-import os
-import hashlib
+
+from .vector_db import VectorDatabase
 
 
 class FaissDatabase(VectorDatabase):
@@ -198,7 +200,7 @@ class FaissDatabase(VectorDatabase):
 
             rec = self.metadata[pos].copy()
             rec["score"] = float(dist_row[i])  # cosine similarity ∈ [-1, 1]
-            rec["id"] = fid                   # stable external id = faiss id
+            rec["id"] = fid  # stable external id = faiss id
             results.append(rec)
 
         return results
@@ -213,7 +215,7 @@ class FaissDatabase(VectorDatabase):
         self._faiss_to_pos.clear()
         self._pos_to_faiss.clear()
         for pos, rec in enumerate(self.metadata):
-            key = self._key_for_idx(rec, pos)   # prefers stored _key if present
+            key = self._key_for_idx(rec, pos)  # prefers stored _key if present
             fid = int(self._id64_from_key(key))
             self.id_map[key] = fid
             self._faiss_to_pos[fid] = pos
@@ -308,7 +310,7 @@ class FaissDatabase(VectorDatabase):
                 "hnsw_M": self._hnsw_M,
                 "hnsw_efSearch": self._hnsw_efSearch,
                 "hnsw_efConstruction": self._hnsw_efConstruction,
-            }
+            },
         }
         with open(os.path.join(path, "metadata.meta"), "wb") as f:
             pickle.dump(payload, f)

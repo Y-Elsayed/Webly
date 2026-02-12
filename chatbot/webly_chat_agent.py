@@ -1,7 +1,6 @@
 import string
-from typing import Optional,List
+from typing import List, Optional
 
-# Keep your original import for Chatbot
 from chatbot.base_chatbot import Chatbot
 
 
@@ -21,39 +20,41 @@ class WeblyChatAgent:
         self.top_k = top_k
 
         default_system_prompt = """
-        You are a helpful assistant that answers questions based solely on the content of a specific website.
+        You are a helpful assistant that answers questions based solely on the content
+        of a specific website.
 
-        You speak as if you *are* the website — natural, direct, and informative. Don't over-greet or over-explain. Only greet if the user does first and it fits the flow.
+        You speak as if you are the website: natural, direct, and informative.
+        Do not over-greet or over-explain. Only greet if the user does first and it
+        fits the flow.
 
         Your answers follow these principles:
 
-        1. If the question is clearly about something covered on the site, answer confidently and concisely, using only the provided content.
-        2. If the user asks about the overall purpose of the site, summarize it naturally and clearly.
-        3. If the question is not related to the website, or there isn't enough information to answer meaningfully, respond only with: `N`.
-        4. If an answer is based on a specific section, include the link (if available) at the end of the response.
-        5. If the user asks about something the site doesn't fully cover, briefly share what is known and direct them to the most relevant section for more.
+        1. If the question is clearly about something covered on the site, answer
+           confidently and concisely, using only the provided content.
+        2. If the user asks about the overall purpose of the site, summarize it
+           naturally and clearly.
+        3. If the question is not related to the website, or there is not enough
+           information to answer meaningfully, respond only with: `N`.
+        4. If an answer is based on a specific section, include the link (if
+           available) at the end of the response.
+        5. If the user asks about something the site does not fully cover, briefly
+           share what is known and direct them to the most relevant section.
 
-        Avoid saying “the website says” or “according to the site” unless it's essential for clarity. Speak as the website itself.
+        Avoid saying "the website says" or "according to the site" unless needed
+        for clarity. Speak as the website itself.
         """
         self.system_prompt = system_prompt or default_system_prompt
 
-        default_prompt = (
-            "User: {question}\n\n"
-            "Website Content:\n{context}"
-        )
+        default_prompt = "User: {question}\n\n" "Website Content:\n{context}"
         self.prompt_template = prompt_template or default_prompt
 
         required_fields = {"context", "question"}
         found_fields = {
-            field_name
-            for _, field_name, _, _ in string.Formatter().parse(self.prompt_template)
-            if field_name
+            field_name for _, field_name, _, _ in string.Formatter().parse(self.prompt_template) if field_name
         }
         missing = required_fields - found_fields
         if missing:
-            raise ValueError(
-                f"Prompt template is missing required placeholders: {', '.join(missing)}"
-            )
+            raise ValueError(f"Prompt template is missing required placeholders: {', '.join(missing)}")
 
     def answer(self, question: str, context: str) -> str:
         context = context.strip()
@@ -94,11 +95,9 @@ class WeblyChatAgent:
             return None
         return self._normalize_rewrites(raw)
 
-    # ---------------- Internal helpers ----------------
     def _normalize_rewrites(self, text: str) -> Optional[str]:
-        """Normalize LLM output to single string. Multiple queries are joined by " || "."""
+        """Normalize LLM output to one string. Multiple queries are joined by " || "."""
         lines = [ln.strip(" -*\t").strip() for ln in text.splitlines() if ln.strip()]
-        # If looks like bullets/multi-lines, compress to ' || '
         if len(lines) >= 2:
             merged = " || ".join(lines)
             return merged[:3000] if merged else None
@@ -106,12 +105,13 @@ class WeblyChatAgent:
 
     def _judge_answerability(self, question: str, context: str) -> bool:
         """
-        Quick LLM probe to check if the provided context is *sufficient* to answer the question.
-        Returns True if the model is confident the answer can be answered *fully* from context.
+        Quick LLM probe to check if the provided context is sufficient to answer the question.
+        Returns True if the model is confident the question can be fully answered from context.
         """
-        ctx_preview = context[:6000]  # keep tiny and cheap
+        ctx_preview = context[:6000]
         probe = (
-            "You are checking if the following website context contains enough information to fully answer the question.\n"
+            "You are checking whether the following website context contains enough information "
+            "to fully answer the question.\n"
             "Answer ONLY 'YES' or 'NO'.\n\n"
             f"Question: {question}\n\n"
             f"Context:\n{ctx_preview}\n\n"

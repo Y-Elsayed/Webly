@@ -1,11 +1,13 @@
-from collections import defaultdict
-import os
 import json
-from typing import Optional, List, Dict, Any
+import os
 import re
+from collections import defaultdict
+from typing import Any, Dict, List, Optional
+
 from crawl.crawler import Crawler
 from embedder.base_embedder import Embedder
 from vector_index.vector_db import VectorDatabase
+
 try:
     from processors.text_summarizer import TextSummarizer
 except Exception:
@@ -26,8 +28,8 @@ class IngestPipeline:
     """
 
     # Soft limits to avoid model/context errors during summarization
-    _MAX_SUMMARY_CHARS: int = 12000          # cap text passed to summarizer
-    _HEAD_TAIL_SPLIT: int = 10000            # keep head N + tail (_MAX - N)
+    _MAX_SUMMARY_CHARS: int = 12000  # cap text passed to summarizer
+    _HEAD_TAIL_SPLIT: int = 10000  # keep head N + tail (_MAX - N)
 
     def __init__(
         self,
@@ -40,7 +42,7 @@ class IngestPipeline:
         use_summary: bool = True,
         debug: bool = False,
         debug_summary_path: Optional[str] = None,
-        progress_callback=None
+        progress_callback=None,
     ):
         self.crawler = crawler
         self.index_path = index_path
@@ -70,10 +72,7 @@ class IngestPipeline:
             self.debug_chunks_path = os.path.join(debug_dir, "raw_chunks.jsonl")
 
         # Page processor: HTML -> text chunks
-        self.page_processor = SemanticPageProcessor(
-            extractor=DefaultTextExtractor(),
-            chunker=DefaultChunker()
-        )
+        self.page_processor = SemanticPageProcessor(extractor=DefaultTextExtractor(), chunker=DefaultChunker())
 
     # -------------------------------------------------------------------------
     # Internal helpers
@@ -121,7 +120,8 @@ class IngestPipeline:
         # dict style first
         if args and isinstance(args[0], dict):
             d = args[0]
-            url = d.get("url"); html = d.get("html")
+            url = d.get("url")
+            html = d.get("html")
             return {"url": url, "html": html} if url and html else None
 
         # tuple style
@@ -130,7 +130,8 @@ class IngestPipeline:
             return {"url": url, "html": html} if url and html else None
 
         # kwargs fallback
-        url = kwargs.get("url"); html = kwargs.get("html")
+        url = kwargs.get("url")
+        html = kwargs.get("html")
         return {"url": url, "html": html} if url and html else None
 
     def _safe_summarize(self, url: str, text: str) -> Optional[str]:
@@ -143,8 +144,8 @@ class IngestPipeline:
         src = text or ""
         if len(src) > self._MAX_SUMMARY_CHARS:
             # keep a large head and a small tail (often contains boilerplate footers we can omit)
-            head = src[:self._HEAD_TAIL_SPLIT]
-            tail = src[-(self._MAX_SUMMARY_CHARS - self._HEAD_TAIL_SPLIT):]
+            head = src[: self._HEAD_TAIL_SPLIT]
+            tail = src[-(self._MAX_SUMMARY_CHARS - self._HEAD_TAIL_SPLIT) :]
             src = head + "\n\n[...] (truncated)\n\n" + tail
 
         try:
@@ -166,11 +167,7 @@ class IngestPipeline:
         writer_cb = override_callback or self._default_page_writer
         # Newer crawler signatures
         try:
-            self.crawler.crawl(
-                on_page_crawled=writer_cb,
-                settings_override=settings_override,
-                save_sitemap=True
-            )
+            self.crawler.crawl(on_page_crawled=writer_cb, settings_override=settings_override, save_sitemap=True)
         except TypeError:
             # Older signatures (graceful fallback)
             try:
@@ -183,9 +180,7 @@ class IngestPipeline:
         """
         Read results file -> chunk -> (optional) summarize -> embed.
         """
-        self.logger.info(
-            f"Transforming pages (summarize = {self.use_summary and bool(self.summarizer)})"
-        )
+        self.logger.info(f"Transforming pages (summarize = {self.use_summary and bool(self.summarizer)})")
         # Initialize FAISS index
         self.db.create(dim=self.embedder.dim)
         transformed_records: List[dict] = []
@@ -212,16 +207,17 @@ class IngestPipeline:
         # Build a reverse map for incoming links once (cheap even for small/med graphs)
         incoming_map = defaultdict(list)
         for from_page, links in (site_graph or {}).items():
-            for link in (links or []):
+            for link in links or []:
                 target = link.get("target")
                 if not target:
                     continue
-                incoming_map[target].append({
-                    "from_page": from_page,
-                    "anchor_text": link.get("anchor_text", ""),
-                    "source_chunk": link.get("source_chunk"),
-                })
-
+                incoming_map[target].append(
+                    {
+                        "from_page": from_page,
+                        "anchor_text": link.get("anchor_text", ""),
+                        "source_chunk": link.get("source_chunk"),
+                    }
+                )
 
         summary_debug_file = open(self.debug_summary_path, "w", encoding="utf-8") if self.debug else None
         chunk_debug_file = open(self.debug_chunks_path, "w", encoding="utf-8") if self.debug else None
@@ -240,14 +236,12 @@ class IngestPipeline:
                     record = json.loads(line)
                     url = record.get("url")
                     html = record.get("html")
-                    
+
                     outgoing_links = site_graph.get(url, [])
                     incoming_links = incoming_map.get(url, [])
 
                     if not url or not html:
-                        self.logger.warning(
-                            f"Skipping malformed record (missing url/html): {record}"
-                        )
+                        self.logger.warning(f"Skipping malformed record (missing url/html): {record}")
                         continue
 
                     chunks = self.page_processor.process(url, html)
@@ -265,12 +259,15 @@ class IngestPipeline:
 
                         # Debug: raw chunks
                         if self.debug and chunk_debug_file:
-                            json.dump({
-                                "url": chunk.get("url", url),
-                                "chunk_index": chunk.get("chunk_index", -1),
-                                "text": content_to_embed,
-                                "length": len(content_to_embed)
-                            }, chunk_debug_file)
+                            json.dump(
+                                {
+                                    "url": chunk.get("url", url),
+                                    "chunk_index": chunk.get("chunk_index", -1),
+                                    "text": content_to_embed,
+                                    "length": len(content_to_embed),
+                                },
+                                chunk_debug_file,
+                            )
                             chunk_debug_file.write("\n")
 
                         # Optional summarization
@@ -281,12 +278,15 @@ class IngestPipeline:
                                 content_to_embed = summary_text
 
                                 if self.debug and summary_debug_file:
-                                    json.dump({
-                                        "url": chunk.get("url", url),
-                                        "chunk_index": chunk.get("chunk_index", -1),
-                                        "original_preview": chunk.get("text", "")[:500],
-                                        "summary_preview": summary_text[:500]
-                                    }, summary_debug_file)
+                                    json.dump(
+                                        {
+                                            "url": chunk.get("url", url),
+                                            "chunk_index": chunk.get("chunk_index", -1),
+                                            "original_preview": chunk.get("text", "")[:500],
+                                            "summary_preview": summary_text[:500],
+                                        },
+                                        summary_debug_file,
+                                    )
                                     summary_debug_file.write("\n")
                             else:
                                 # If summarizer failed, proceed with original text
@@ -299,9 +299,7 @@ class IngestPipeline:
                             try:
                                 embedding = self.embedder.embed(part)
                             except Exception as e:
-                                self.logger.error(
-                                    f"Embedding error for {url} (seg {seg_idx}): {e}"
-                                )
+                                self.logger.error(f"Embedding error for {url} (seg {seg_idx}): {e}")
                                 continue
                             if embedding is None:
                                 self.logger.warning(
@@ -311,7 +309,7 @@ class IngestPipeline:
 
                             rec = {
                                 **chunk,  # keep original fields (url, hierarchy, etc.)
-                                "text": part,                # the actual embedded segment text
+                                "text": part,  # the actual embedded segment text
                                 "embedding": embedding,
                                 "id": f"{parent_chunk_id}__seg_{seg_idx}",
                                 "metadata": {
@@ -325,7 +323,6 @@ class IngestPipeline:
                                 },
                             }
                             transformed_records.append(rec)
-
 
                 except json.JSONDecodeError:
                     self.logger.warning("Skipping line (not valid JSON).")
@@ -394,9 +391,7 @@ class IngestPipeline:
 
                 try:
                     self.crawler.crawl(
-                        on_page_crawled=writer_cb,
-                        settings_override=settings_override,
-                        save_sitemap=True
+                        on_page_crawled=writer_cb, settings_override=settings_override, save_sitemap=True
                     )
                 except TypeError:
                     try:
@@ -504,6 +499,7 @@ class IngestPipeline:
             return [text]
         paras = re.split(r"\n{2,}", text)
         chunks, cur, cur_toks = [], [], 0
+
         def flush():
             nonlocal chunks, cur, cur_toks
             if cur:
@@ -511,6 +507,7 @@ class IngestPipeline:
                 if joined:
                     chunks.append(joined)
             cur, cur_toks = [], 0
+
         for p in paras:
             ptok = self._count_tokens(p)
             if ptok > max_tok:
@@ -529,11 +526,13 @@ class IngestPipeline:
                         continue
                     if cur_toks + stok > max_tok:
                         flush()
-                    cur.append(s); cur_toks += stok
+                    cur.append(s)
+                    cur_toks += stok
                 flush()
             else:
                 if cur_toks + ptok > max_tok:
                     flush()
-                cur.append(p); cur_toks += ptok
+                cur.append(p)
+                cur_toks += ptok
         flush()
         return [c for c in chunks if c]

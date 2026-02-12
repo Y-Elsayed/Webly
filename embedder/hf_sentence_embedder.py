@@ -1,5 +1,7 @@
 from sentence_transformers import SentenceTransformer
+
 from .base_embedder import Embedder
+
 
 class HFSentenceEmbedder(Embedder):
     def __init__(self, model_name: str | None = "sentence-transformers/all-MiniLM-L6-v2"):

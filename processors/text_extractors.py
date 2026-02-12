@@ -1,7 +1,7 @@
-from bs4 import BeautifulSoup
-import trafilatura
 from abc import ABC, abstractmethod
-import re
+
+import trafilatura
+from bs4 import BeautifulSoup
 
 
 class TextExtractor(ABC):
@@ -10,6 +10,7 @@ class TextExtractor(ABC):
     Subclasses should implement __call__ method to extract text from the HTML,
     and return a dict with the url, extracted text (as 'text'), and any other relevant info.
     """
+
     @abstractmethod
     def __call__(self, url: str, html: str) -> dict:
         raise NotImplementedError("Subclasses must implement __call__")
@@ -20,7 +21,7 @@ def _decode_cf_email(encoded: str) -> str:
     """Decode Cloudflare's email obfuscation (data-cfemail)."""
     r = bytes.fromhex(encoded)
     key = r[0]
-    return ''.join(chr(b ^ key) for b in r[1:])
+    return "".join(chr(b ^ key) for b in r[1:])
 
 
 def _replace_cf_emails(html: str) -> str:
@@ -50,11 +51,7 @@ class TrafilaturaTextExtractor(TextExtractor):
         if not extracted:
             return {}
 
-        return {
-            "url": url,
-            "text": extracted,
-            "length": len(extracted)
-        }
+        return {"url": url, "text": extracted, "length": len(extracted)}
 
 
 # Default alias for convenience

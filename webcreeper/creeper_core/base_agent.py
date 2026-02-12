@@ -1,9 +1,13 @@
-from abc import ABC, abstractmethod
-from creeper_core.utils import configure_logging
-import requests
-from urllib.parse import urlparse, parse_qs, urlunparse, urlencode, parse_qsl
+import re
+import time
 import urllib.robotparser as robotparser
-import re, time
+from abc import ABC, abstractmethod
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlunparse
+
+import requests
+
+from creeper_core.utils import configure_logging
+
 
 class BaseAgent(ABC):
     """
@@ -21,37 +25,37 @@ class BaseAgent(ABC):
     # Safe fallback defaults (subclasses like Atlas can override with their own DEFAULT_SETTINGS)
     DEFAULT_SETTINGS = {
         "user_agent": "DefaultCrawler",
-        "timeout": 10,                    # seconds (if connect/read not provided)
-        "connect_timeout": None,          # seconds
-        "read_timeout": None,             # seconds
-        "max_retries": 2,                 # transient retries
-        "backoff_factor": 0.5,            # seconds * (2**attempt)
+        "timeout": 10,  # seconds (if connect/read not provided)
+        "connect_timeout": None,  # seconds
+        "read_timeout": None,  # seconds
+        "max_retries": 2,  # transient retries
+        "backoff_factor": 0.5,  # seconds * (2**attempt)
         "status_forcelist": [429, 500, 502, 503, 504],
-        "rate_limit_delay": 0.2,          # seconds between requests per host
-        "respect_robots": True,           # honor robots.txt
-        "allowed_domains": [],            # exact hosts (or apex if allow_subdomains=True)
-        "blocked_domains": [],            # explicit deny
-        "allow_subdomains": False,        # exact host by default
-        "skip_url_patterns": [],          # regex strings
-        "allow_url_patterns": [],         # regex strings (if provided, must match)
-        "block_url_patterns": [],         # regex strings (deny if match)
+        "rate_limit_delay": 0.2,  # seconds between requests per host
+        "respect_robots": True,  # honor robots.txt
+        "allowed_domains": [],  # exact hosts (or apex if allow_subdomains=True)
+        "blocked_domains": [],  # explicit deny
+        "allow_subdomains": False,  # exact host by default
+        "skip_url_patterns": [],  # regex strings
+        "allow_url_patterns": [],  # regex strings (if provided, must match)
+        "block_url_patterns": [],  # regex strings (deny if match)
         "heuristic_skip_long_urls": True,
-        "max_url_length": 200,            # conservative default (Atlas uses 2000; it overrides in its own settings)
+        "max_url_length": 200,  # conservative default (Atlas uses 2000; it overrides in its own settings)
         "heuristic_skip_state_param": True,
-        "normalize_query": True,          # sort query params
-        "strip_tracking_params": True,    # drop common tracking params
+        "normalize_query": True,  # sort query params
+        "strip_tracking_params": True,  # drop common tracking params
         "tracking_param_prefixes": ["utm_"],
         "tracking_params": ["gclid", "fbclid", "msclkid", "igshid"],
-        "headers": {},                    # extra headers to merge
-        "proxies": None,                  # requests proxies dict
-        "follow_redirects": True,         # requests allow_redirects
-        "max_content_length": None,       # bytes; skip if response declares larger
+        "headers": {},  # extra headers to merge
+        "proxies": None,  # requests proxies dict
+        "follow_redirects": True,  # requests allow_redirects
+        "max_content_length": None,  # bytes; skip if response declares larger
     }
 
     def __init__(self, settings: dict = {}):
         self.settings = {**self.DEFAULT_SETTINGS, **getattr(self, "DEFAULT_SETTINGS", {}), **settings}
         self.logger = configure_logging(self.__class__.__name__)
-        self.robots_cache = {}     # host -> RobotFileParser (or None if unavailable)
+        self.robots_cache = {}  # host -> RobotFileParser (or None if unavailable)
         self.blacklist = set()
         self.visited = set()
         self.disallowed_reasons = {}  # url -> [reasons]
@@ -104,8 +108,7 @@ class BaseAgent(ABC):
             prefixes = tuple((self.settings.get("tracking_param_prefixes") or []))
             drop = set(self.settings.get("tracking_params") or [])
             query_pairs = [
-                (k, v) for (k, v) in query_pairs
-                if (not k.lower().startswith(prefixes)) and (k.lower() not in drop)
+                (k, v) for (k, v) in query_pairs if (not k.lower().startswith(prefixes)) and (k.lower() not in drop)
             ]
 
         if self.settings.get("normalize_query", True) and query_pairs:
@@ -123,7 +126,6 @@ class BaseAgent(ABC):
 
     def fetch_robots_txt(self, url: str):
         home_url = self.get_home_url(url)
-        domain_key = urlparse(home_url).netloc
         robots_url = f"{home_url}/robots.txt"
 
         try:
@@ -134,7 +136,7 @@ class BaseAgent(ABC):
                 headers=headers,
                 timeout=self._timeouts(),
                 allow_redirects=self.settings.get("follow_redirects", True),
-                proxies=self.settings.get("proxies")
+                proxies=self.settings.get("proxies"),
             )
             if resp.status_code == 200 and resp.text:
                 rp = robotparser.RobotFileParser()
@@ -169,9 +171,9 @@ class BaseAgent(ABC):
     # -------------------- domain policy --------------------
 
     def is_allowed_domain(self, url: str) -> bool:
-        allowed = self.settings.get('allowed_domains', []) or []
-        blocked = self.settings.get('blocked_domains', []) or []
-        allow_sub = self.settings.get('allow_subdomains', False)
+        allowed = self.settings.get("allowed_domains", []) or []
+        blocked = self.settings.get("blocked_domains", []) or []
+        allow_sub = self.settings.get("allow_subdomains", False)
 
         host = urlparse(url).netloc
         norm_host = self._norm_host(host)
@@ -266,7 +268,7 @@ class BaseAgent(ABC):
         url = self._normalize_url(url)
         self.visited.add(url)
 
-        headers = {"User-Agent": self.settings.get('user_agent', 'DefaultCrawler')}
+        headers = {"User-Agent": self.settings.get("user_agent", "DefaultCrawler")}
         headers.update(self.settings.get("headers", {}) or {})
         proxies = self.settings.get("proxies")
         allow_redirects = self.settings.get("follow_redirects", True)
@@ -299,12 +301,12 @@ class BaseAgent(ABC):
                         pass
 
                 if resp.status_code == 200:
-                    content_type = resp.headers.get('Content-Type', '') or ''
+                    content_type = resp.headers.get("Content-Type", "") or ""
                     return resp.text, content_type
 
                 # Retry on transient codes
                 if resp.status_code in status_forcelist and attempt < max_retries:
-                    sleep_s = backoff * (2 ** attempt)
+                    sleep_s = backoff * (2**attempt)
                     self.logger.warning(f"Retryable status {resp.status_code} for {url}; sleeping {sleep_s:.2f}s")
                     time.sleep(sleep_s)
                     continue
@@ -314,7 +316,7 @@ class BaseAgent(ABC):
 
             except requests.exceptions.RequestException as e:
                 if attempt < max_retries:
-                    sleep_s = backoff * (2 ** attempt)
+                    sleep_s = backoff * (2**attempt)
                     self.logger.warning(f"Error fetching {url}: {e}; retrying in {sleep_s:.2f}s")
                     time.sleep(sleep_s)
                     continue
