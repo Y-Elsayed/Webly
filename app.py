@@ -585,14 +585,21 @@ if projects and st.session_state.get("active_project"):
         crawl_tab, index_tab, chat_tab = st.tabs(["Crawling", "Indexing", "Chat"])
 
         with crawl_tab:
-            start_url_input = st.text_input("Start URL", cfg.get("start_url", ""))
+            start_url_input = st.text_input(
+                "Start URL",
+                cfg.get("start_url", ""),
+                placeholder="https://example.com/docs",
+                help="Example: https://example.com/docs",
+            )
 
             allowed_domains_text = ", ".join(cfg.get("allowed_domains", []))
             allowed_domains_input = st.text_area(
                 "Allowed domains (comma-separated)",
                 allowed_domains_text,
+                placeholder="example.com, docs.example.com",
                 help="If left empty and you choose Entire site, Webly auto-fills from Start URL.",
             )
+            st.caption("Format: domain list, comma-separated. Example: `example.com, docs.example.com`")
 
             crawl_mode = st.radio(
                 "Crawl scope",
@@ -603,24 +610,48 @@ if projects and st.session_state.get("active_project"):
             allowed_paths_text = st.text_area(
                 "Allowed paths (prefixes, comma-separated)",
                 ", ".join(cfg.get("allowed_paths", [])),
+                placeholder="/docs, /blog",
+                help="Example: /docs, /blog",
             )
+            st.caption("Path prefix format: start with `/`. Example: `/docs, /blog`")
             blocked_paths_text = st.text_area(
                 "Blocked paths (prefixes, comma-separated)",
                 ", ".join(cfg.get("blocked_paths", [])),
+                placeholder="/login, /checkout",
+                help="Example: /login, /checkout",
             )
+            st.caption("Blocked prefix format: start with `/`. Example: `/login, /checkout`")
             allow_patterns_text = st.text_area(
                 "Allow URL patterns (regex, one per line)",
                 "\n".join(cfg.get("allow_url_patterns", [])),
+                placeholder="^https://example\\.com/docs/.*$",
+                help="Example regex per line.",
+            )
+            st.caption(
+                "Regex format: one pattern per line. Example: "
+                "`^https://example\\.com/docs/.*$`"
             )
             block_patterns_text = st.text_area(
                 "Block URL patterns (regex, one per line)",
                 "\n".join(cfg.get("block_url_patterns", [])),
+                placeholder=".*\\?(utm_|ref=).*",
+                help="Example regex per line.",
+            )
+            st.caption(
+                "Regex format: one pattern per line. Example: "
+                "`.*\\?(utm_|ref=).*`"
             )
 
             seed_urls_text = st.text_area(
                 "Specific pages (one URL per line)",
                 "\n".join(cfg.get("seed_urls", [])),
+                placeholder="https://example.com/docs/getting-started\nhttps://example.com/docs/api",
                 help="Used only when 'Only specific pages' is selected.",
+            )
+            st.caption(
+                "One full URL per line. Example:\n"
+                "`https://example.com/docs/getting-started`\n"
+                "`https://example.com/docs/api`"
             )
 
             allow_subdomains = st.checkbox("Allow subdomains", value=cfg.get("allow_subdomains", False))
@@ -656,11 +687,23 @@ if projects and st.session_state.get("active_project"):
             results_file_input = st.text_input(
                 "Results file (advanced)",
                 cfg.get("results_file", "results.jsonl"),
+                placeholder="results.jsonl",
+                help="Example: results.jsonl",
             )
 
         with chat_tab:
-            chat_model = st.text_input("Chat model", cfg.get("chat_model", "gpt-4o-mini"))
-            summary_model = st.text_input("Summary model (optional)", cfg.get("summary_model", ""))
+            chat_model = st.text_input(
+                "Chat model",
+                cfg.get("chat_model", "gpt-4o-mini"),
+                placeholder="gpt-4o-mini",
+                help="Example: gpt-4o-mini",
+            )
+            summary_model = st.text_input(
+                "Summary model (optional)",
+                cfg.get("summary_model", ""),
+                placeholder="gpt-4o-mini",
+                help="Optional. Example: gpt-4o-mini",
+            )
             score_threshold = st.slider(
                 "Default similarity threshold",
                 0.0,
