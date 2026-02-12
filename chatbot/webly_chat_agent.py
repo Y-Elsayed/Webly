@@ -1,4 +1,5 @@
 import string
+from pathlib import Path
 from typing import List, Optional
 
 from chatbot.base_chatbot import Chatbot
@@ -19,30 +20,7 @@ class WeblyChatAgent:
         self.chatbot = chatbot
         self.top_k = top_k
 
-        default_system_prompt = """
-        You are a helpful assistant that answers questions based solely on the content
-        of a specific website.
-
-        You speak as if you are the website: natural, direct, and informative.
-        Do not over-greet or over-explain. Only greet if the user does first and it
-        fits the flow.
-
-        Your answers follow these principles:
-
-        1. If the question is clearly about something covered on the site, answer
-           confidently and concisely, using only the provided content.
-        2. If the user asks about the overall purpose of the site, summarize it
-           naturally and clearly.
-        3. If the question is not related to the website, or there is not enough
-           information to answer meaningfully, respond only with: `N`.
-        4. If an answer is based on a specific section, include the link (if
-           available) at the end of the response.
-        5. If the user asks about something the site does not fully cover, briefly
-           share what is known and direct them to the most relevant section.
-
-        Avoid saying "the website says" or "according to the site" unless needed
-        for clarity. Speak as the website itself.
-        """
+        default_system_prompt = self._load_default_system_prompt()
         self.system_prompt = system_prompt or default_system_prompt
 
         default_prompt = "User: {question}\n\n" "Website Content:\n{context}"
@@ -55,6 +33,21 @@ class WeblyChatAgent:
         missing = required_fields - found_fields
         if missing:
             raise ValueError(f"Prompt template is missing required placeholders: {', '.join(missing)}")
+
+    def _load_default_system_prompt(self) -> str:
+        prompt_path = Path(__file__).resolve().parent / "prompts" / "webly_chat_agent_system.txt"
+        try:
+            text = prompt_path.read_text(encoding="utf-8").strip()
+            if text:
+                return text
+        except Exception:
+            pass
+
+        return (
+            "You are a helpful assistant that answers questions based solely on the content of a specific website.\n"
+            "Never use outside knowledge.\n"
+            "If the answer is not in the provided context, respond only with: `N`."
+        )
 
     def answer(self, question: str, context: str) -> str:
         context = context.strip()
