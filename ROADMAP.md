@@ -12,6 +12,8 @@ This roadmap is organized by Webly components and split into:
 - Multi-chat management with persisted histories
 - Key validation flow for OpenAI API keys
 - Dockerized app run path
+- Retrieval mode controls in UI (`builder` / `classic`)
+- Memory window control (`leave_last_k`) and builder rounds setting in UI
 
 ### Next
 - Improve overall UI quality (layout consistency, clarity of actions/states, better empty/error states)
@@ -82,10 +84,15 @@ This roadmap is organized by Webly components and split into:
 - Hybrid retrieval path (BM25 + vector)
 - Graph/section expansion and reranking
 - Answerability/fallback behavior
+- Builder retrieval mode with LLM-driven concept extraction and follow-up planning
+- Initial query routing modes (`transform_only`, `retrieve_followup`, `retrieve_new`)
+- Best-effort responses with concept-oriented "Read more" links
 
 ### Next
 - Improve query understanding so retrieval can better parse user intent and reformulate searches
 - Add stronger reasoning-aware retrieval steps for ambiguous or multi-part questions
+- Improve route-decision quality so standalone questions are less likely to be treated as follow-ups
+- Improve "Read more" precision to prioritize links most relevant to the current question only
 - Source citation quality improvements
 - Query evaluation harness (gold questions + metrics)
 - Retrieval cache for repeated queries
@@ -117,6 +124,7 @@ This roadmap is organized by Webly components and split into:
 - Per-project config storage
 - Per-chat persisted history payloads
 - Project folder conventions for results/index/chats
+- BOM-safe JSON reads/writes for project config and chat files
 
 ### Next
 - Validation and migration handling for old config/chat schemas

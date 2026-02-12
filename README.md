@@ -7,16 +7,25 @@ Webly is a modular website-to-RAG framework. It crawls websites, extracts and ch
 Current provider note:
 - API-backed model integration is currently OpenAI-focused (`OPENAI_API_KEY`).
 
+Grounding policy:
+- Answers are intended to be grounded in retrieved website context.
+- If coverage is weak or unrelated, Webly should return a fallback instead of using external knowledge.
+
+User guide:
+- GUI usage guide: `docs/USER_GUIDE.md`
+
 ## What It Does
 - Crawl websites with policy controls (domains, depth, robots, URL filters)
 - Build `results.jsonl` and a site `graph.json`
 - Chunk and optionally summarize content
 - Embed content and index it in FAISS
 - Retrieve, rerank, and answer user questions in Streamlit
+- Run an agentic builder retrieval mode with concept coverage checks and follow-up retrieval rounds
 
 ## Architecture
 - `app.py`: Streamlit UI and project/chat management
 - `main.py`: pipeline factory (`build_pipelines`)
+- `chatbot/prompts/`: prompt files used by retrieval/chat agents
 - `crawl/` + `webcreeper/`: crawling
 - `processors/`: extraction, chunking, summarization
 - `embedder/`: embedding backends
@@ -56,7 +65,15 @@ Create/update a project in the UI, or use a config with keys like:
 - `start_url`, `allowed_domains`
 - `output_dir`, `index_dir`, `results_file`
 - `embedding_model`, `chat_model`, optional `summary_model`
+- `retrieval_mode` (`builder` or `classic`)
+- `builder_max_rounds` (follow-up retrieval rounds for builder mode)
+- `leave_last_k` (limit memory to the last K question/answer pairs; `0` keeps default behavior)
 - crawl controls (`max_depth`, `respect_robots`, `allow_url_patterns`, etc.)
+
+Current defaults:
+- `retrieval_mode = "builder"`
+- `builder_max_rounds = 1`
+- `leave_last_k = 2`
 
 ## Development
 ```bash
