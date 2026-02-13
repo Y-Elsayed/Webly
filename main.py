@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 sys.path.append(os.path.abspath("webcreeper"))
 
 from chatbot.chatgpt_model import ChatGPTModel
+from chatbot.prompts.system_prompts import apply_mode_flags, get_system_prompt
 from chatbot.webly_chat_agent import WeblyChatAgent
 from crawl.crawler import Crawler
 from pipeline.ingest_pipeline import IngestPipeline
@@ -92,7 +93,12 @@ def build_pipelines(config, api_key: str | None = None):
 
     query_pipeline = None
     if chatbot is not None:
-        configured_system_prompt = (config.get("system_prompt") or "").strip() or None
+        mode = str(config.get("answering_mode", "technical_grounded"))
+        custom_text = config.get("system_prompt") or ""
+        custom_override = bool(config.get("system_prompt_custom_override", False))
+        allow_generated_examples = bool(config.get("allow_generated_examples", False))
+        configured_system_prompt = get_system_prompt(mode, custom_text, custom_override)
+        configured_system_prompt = apply_mode_flags(mode, configured_system_prompt, allow_generated_examples)
         agent = WeblyChatAgent(embedder, db, chatbot, system_prompt=configured_system_prompt)
         query_pipeline = QueryPipeline(
             chat_agent=agent,

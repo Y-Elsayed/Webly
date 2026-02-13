@@ -4,6 +4,11 @@ from urllib.parse import urlparse
 import streamlit as st
 from openai import OpenAI
 
+from chatbot.prompts.system_prompts import (
+    AnsweringMode,
+    apply_mode_flags,
+    get_system_prompt,
+)
 from main import build_pipelines
 from storage.storage_manager import StorageManager
 
@@ -128,20 +133,46 @@ def _results_file_ready(output_dir: str, results_file: str) -> bool:
     return os.path.exists(path) and os.path.getsize(path) > 0
 
 
-def _default_system_prompt_text() -> str:
-    prompt_path = os.path.join(APP_DIR, "chatbot", "prompts", "webly_chat_agent_system.txt")
-    try:
-        with open(prompt_path, encoding="utf-8") as f:
-            text = f.read().strip()
-            if text:
-                return text
-    except Exception:
-        pass
-    return (
-        "You are a helpful assistant that answers questions based solely on the content of a specific website.\n"
-        "Never use outside knowledge.\n"
-        "If the answer is not in the provided context, respond only with: `N`."
-    )
+def _mode_default_prompt_text(mode: str, allow_generated_examples: bool) -> str:
+    base = get_system_prompt(mode, custom_text="", custom_override=False)
+    return apply_mode_flags(mode, base, allow_generated_examples)
+
+
+def _ensure_prompt_editor_state(project: str, cfg: dict):
+    mode_key = f"answering_mode__{project}"
+    prompt_key = f"system_prompt_text__{project}"
+    override_key = f"system_prompt_custom_override__{project}"
+    allow_examples_key = f"allow_generated_examples__{project}"
+    last_mode_key = f"answering_mode_last__{project}"
+    last_allow_key = f"allow_generated_examples_last__{project}"
+    loaded_key = "prompt_editor_loaded_project"
+
+    if (
+        st.session_state.get(loaded_key) == project
+        and mode_key in st.session_state
+        and prompt_key in st.session_state
+        and override_key in st.session_state
+        and allow_examples_key in st.session_state
+        and last_mode_key in st.session_state
+        and last_allow_key in st.session_state
+    ):
+        return mode_key, prompt_key, override_key, allow_examples_key, last_mode_key, last_allow_key
+
+    mode = str(cfg.get("answering_mode", AnsweringMode.TECHNICAL_GROUNDED.value))
+    allow_examples = bool(cfg.get("allow_generated_examples", False))
+    custom_override = bool(cfg.get("system_prompt_custom_override", False))
+    custom_text = str(cfg.get("system_prompt", ""))
+
+    st.session_state[mode_key] = mode
+    st.session_state[allow_examples_key] = allow_examples
+    st.session_state[override_key] = custom_override
+    st.session_state[prompt_key] = get_system_prompt(mode, custom_text, custom_override)
+    if not custom_override:
+        st.session_state[prompt_key] = _mode_default_prompt_text(mode, allow_examples)
+    st.session_state[last_mode_key] = mode
+    st.session_state[last_allow_key] = allow_examples
+    st.session_state[loaded_key] = project
+    return mode_key, prompt_key, override_key, allow_examples_key, last_mode_key, last_allow_key
 
 
 # ------------------------------------------------------------------------------------
@@ -305,7 +336,10 @@ with st.sidebar:
                         "allowed_domains": [d.strip() for d in new_domains.split(",") if d.strip()],
                         "embedding_model": EMBEDDER_OPTIONS[embed_choice],
                         "chat_model": "gpt-4o-mini",
-                        "system_prompt": _default_system_prompt_text(),
+                        "answering_mode": AnsweringMode.TECHNICAL_GROUNDED.value,
+                        "allow_generated_examples": False,
+                        "system_prompt_custom_override": False,
+                        "system_prompt": "",
                         "summary_model": "",
                         "score_threshold": 0.5,
                         "retrieval_mode": "builder",
@@ -728,12 +762,85 @@ if projects and st.session_state.get("active_project"):
                 placeholder="gpt-4o-mini",
                 help="Example: gpt-4o-mini",
             )
-            system_prompt_input = st.text_area(
-                "System prompt (optional, per project)",
-                cfg.get("system_prompt") or _default_system_prompt_text(),
-                height=180,
-                help="Leave empty to use Webly's default prompt from chatbot/prompts/webly_chat_agent_system.txt.",
+            mode_key, prompt_key, override_key, allow_examples_key, last_mode_key, last_allow_key = (
+                _ensure_prompt_editor_state(current_project, cfg)
             )
+            reset_pending_key = f"system_prompt_reset_pending__{current_project}"
+
+            def _mark_custom_override():
+                # Manual text edits are treated as explicit prompt override.
+                current = (st.session_state.get(prompt_key) or "").strip()
+                if current:
+                    st.session_state[override_key] = True
+                    return
+                st.session_state[override_key] = False
+                st.session_state[reset_pending_key] = True
+
+            if st.session_state.pop(reset_pending_key, False):
+                st.session_state[prompt_key] = _mode_default_prompt_text(
+                    st.session_state[mode_key], st.session_state[allow_examples_key]
+                )
+                st.session_state[override_key] = False
+
+            mode_labels = [
+                AnsweringMode.STRICT_GROUNDED.value,
+                AnsweringMode.TECHNICAL_GROUNDED.value,
+                AnsweringMode.ASSISTED_EXAMPLES.value,
+            ]
+            if st.session_state[mode_key] not in mode_labels:
+                st.session_state[mode_key] = AnsweringMode.TECHNICAL_GROUNDED.value
+
+            answering_mode = st.selectbox(
+                "Answering mode",
+                mode_labels,
+                key=mode_key,
+                help=(
+                    "strict_grounded: policy/compliance/marketing sites; high trust; avoid inference.\n"
+                    "technical_grounded: developer/API docs; allow reasoning strictly derived from context.\n"
+                    "assisted_examples: onboarding/tutorial style; optional generated examples with explicit labeling."
+                ),
+            )
+
+            allow_generated_examples = st.checkbox(
+                "Allow generated examples (assisted_examples only)",
+                key=allow_examples_key,
+                help=(
+                    "When enabled in assisted_examples mode, generated examples are allowed only with explicit label:\n"
+                    "'GENERATED EXAMPLE (not from documentation)'."
+                ),
+            )
+
+            mode_changed = st.session_state[mode_key] != st.session_state.get(last_mode_key)
+            allow_changed = st.session_state[allow_examples_key] != st.session_state.get(last_allow_key)
+            if (mode_changed or allow_changed) and not st.session_state[override_key]:
+                st.session_state[prompt_key] = _mode_default_prompt_text(
+                    st.session_state[mode_key], st.session_state[allow_examples_key]
+                )
+            st.session_state[last_mode_key] = st.session_state[mode_key]
+            st.session_state[last_allow_key] = st.session_state[allow_examples_key]
+
+            system_prompt_input = st.text_area(
+                "System prompt (actual prompt used for this project)",
+                key=prompt_key,
+                height=220,
+                on_change=_mark_custom_override,
+                help=(
+                    "This field always shows the actual prompt that will be sent to the LLM.\n"
+                    "If you edit it manually, it becomes a custom override and mode changes won't overwrite it."
+                ),
+            )
+
+            c_reset, c_state = st.columns([1, 2])
+            with c_reset:
+                if st.button("Reset to mode default"):
+                    st.session_state[reset_pending_key] = True
+                    st.rerun()
+            with c_state:
+                if st.session_state[override_key]:
+                    st.caption("Prompt source: custom override")
+                else:
+                    st.caption("Prompt source: mode default")
+
             summary_model = st.text_input(
                 "Summary model (optional)",
                 cfg.get("summary_model", ""),
@@ -809,6 +916,9 @@ if projects and st.session_state.get("active_project"):
             cfg_edit["results_file"] = results_file_input
 
             cfg_edit["chat_model"] = chat_model
+            cfg_edit["answering_mode"] = answering_mode
+            cfg_edit["allow_generated_examples"] = bool(allow_generated_examples)
+            cfg_edit["system_prompt_custom_override"] = bool(st.session_state.get(override_key, False))
             cfg_edit["system_prompt"] = system_prompt_input
             cfg_edit["summary_model"] = summary_model
             cfg_edit["score_threshold"] = float(score_threshold)
