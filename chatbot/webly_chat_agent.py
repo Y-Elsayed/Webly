@@ -1,6 +1,7 @@
+import json
 import string
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from chatbot.base_chatbot import Chatbot
 
@@ -61,6 +62,41 @@ class WeblyChatAgent:
         if response == "N":
             return "I'm sorry, I couldn't find any relevant information to answer that question."
         return response
+
+    def answer_with_support(self, question: str, context: str) -> Tuple[str, str]:
+        """
+        Return a tuple: (answer_text, support_flag), where support_flag is 'Y' or 'N'.
+        'Y' means the answer is supported by provided context.
+        """
+        context = context.strip()
+        if not context:
+            return "I'm sorry, I couldn't find any relevant information to answer that question.", "N"
+
+        prompt = self.prompt_template.format(context=context, question=question)
+        full_prompt = (
+            f"{self.system_prompt.strip()}\n\n{prompt.strip()}\n\n"
+            "Return JSON only with this exact schema:\n"
+            '{"answer":"<final answer text>", "supported":"Y|N"}\n'
+            "- Set supported='Y' only if the answer is supported by the provided context.\n"
+            "- Set supported='N' if the answer is not sufficiently supported.\n"
+            "- Do not include markdown fences or extra keys."
+        )
+
+        raw = (self.chatbot.generate(full_prompt) or "").strip()
+        try:
+            parsed = json.loads(raw)
+            answer = str(parsed.get("answer") or "").strip()
+            supported = str(parsed.get("supported") or "").strip().upper()
+            if supported not in {"Y", "N"}:
+                supported = "N"
+            if not answer:
+                answer = "I'm sorry, I couldn't find any relevant information to answer that question."
+            return answer, supported
+        except Exception:
+            # Safe fallback: use existing answer path + answerability probe.
+            answer = self.answer(question, context)
+            supported = "Y" if self._judge_answerability(question, context) else "N"
+            return answer, supported
 
     def rewrite_query(self, question: str, hints: List[str], max_chars: int = 500) -> Optional[str]:
         """
