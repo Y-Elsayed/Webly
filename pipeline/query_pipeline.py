@@ -647,6 +647,11 @@ class QueryPipeline:
         if not results:
             return "I couldn't find anything on this site related to your question."
 
+        context = self._assemble_context(results[: min(8, len(results))], max_chars=min(self.max_context_chars, 8000))
+        _, supported = self.chat_agent.answer_with_support(question, context)
+        if supported != "Y":
+            return "I couldn't find enough information on this site to answer that directly."
+
         # Pick up to 3 distinct useful URLs with optional section labels
         links: List[str] = []
         seen = set()
@@ -694,11 +699,15 @@ class QueryPipeline:
                 "If information is missing, explicitly say it is not covered in the documentation.\n"
                 f"Missing concepts detected: {', '.join(missing)}"
             )
-            base_answer = self.chat_agent.answer(guided_question, context).strip()
+            base_answer, supported = self.chat_agent.answer_with_support(guided_question, context)
+            base_answer = (base_answer or "").strip()
         else:
-            base_answer = self.chat_agent.answer(question_for_answer, context).strip()
+            base_answer, supported = self.chat_agent.answer_with_support(question_for_answer, context)
+            base_answer = (base_answer or "").strip()
 
         if not used_urls:
+            return base_answer
+        if str(supported).upper() != "Y":
             return base_answer
 
         lines = ["Read more:"]

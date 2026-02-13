@@ -18,6 +18,12 @@ class _DummyChatAgent:
     def answer(self, _question: str, _context: str) -> str:
         return "Base answer"
 
+    def answer_with_support(self, question: str, _context: str):
+        q = (question or "").lower()
+        if "capital of france" in q:
+            return "Base answer", "N"
+        return "Base answer", "Y"
+
 
 def test_read_more_uses_only_urls_from_final_assembled_context():
     qp = QueryPipeline(chat_agent=_DummyChatAgent(), allow_best_effort=True)
@@ -59,3 +65,56 @@ def test_read_more_omitted_when_no_used_sources():
 
     assert response == "Base answer"
     assert "Read more:" not in response
+
+
+def test_read_more_omitted_for_off_topic_question_even_with_used_sources():
+    qp = QueryPipeline(chat_agent=_DummyChatAgent(), allow_best_effort=True)
+
+    used_results = [
+        {
+            "id": "pyd#1",
+            "url": "https://docs.pydantic.dev/dev/concepts/validators/",
+            "text": "Pydantic validators run in a defined order for model fields.",
+            "hierarchy": ["Concepts", "Validators"],
+        }
+    ]
+    context = qp._assemble_context(used_results, max_chars=10000)
+
+    response = qp._best_effort_with_links(
+        question_for_answer="What is the capital of France?",
+        context=context,
+        concepts=["capital", "france"],
+        coverage={"missing": ["capital", "france"], "covered": []},
+        results=used_results,
+    )
+
+    assert response == "Base answer"
+    assert "Read more:" not in response
+
+
+def test_fallback_omits_help_links_for_off_topic_results():
+    qp = QueryPipeline(chat_agent=_DummyChatAgent(), allow_best_effort=True)
+    results = [
+        {
+            "url": "https://docs.pydantic.dev/dev/concepts/validators/",
+            "text": "Pydantic validators define field validation flow.",
+            "hierarchy": ["Concepts", "Validators"],
+        }
+    ]
+    message = qp._fallback_message(results, "What is the capital of France?")
+    assert "These pages may help" not in message
+    assert "validators" not in message.lower()
+
+
+def test_fallback_keeps_help_links_when_llm_marks_supported():
+    qp = QueryPipeline(chat_agent=_DummyChatAgent(), allow_best_effort=True)
+    results = [
+        {
+            "url": "https://docs.pydantic.dev/dev/concepts/validators/",
+            "text": "Pydantic validators define field validation flow.",
+            "hierarchy": ["Concepts", "Validators"],
+        }
+    ]
+    message = qp._fallback_message(results, "How do validators work?")
+    assert "These pages may help" in message
+    assert "https://docs.pydantic.dev/dev/concepts/validators/" in message
