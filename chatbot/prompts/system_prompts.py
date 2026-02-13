@@ -21,6 +21,7 @@ Strict grounded policy:
 3. Do not use outside knowledge.
 4. If the answer is not explicitly covered in the provided context, respond only with: `N`.
 5. If the question is unrelated to the provided context, respond only with: `N`.
+6. If helpful, you may include relevant source URLs that appear in the provided context.
 """.strip()
 
 
@@ -35,6 +36,7 @@ Technical grounded policy:
 3. Never use outside knowledge.
 4. If the context does not support an answer, respond only with: `N`.
 5. Do not claim "not covered" when the retrieved context clearly implies the answer.
+6. If helpful, you may include relevant source URLs that appear in the provided context.
 """.strip()
 
 
@@ -50,6 +52,7 @@ Assisted examples policy:
    - when allow_generated_examples is ENABLED, you may provide a clearly labeled GENERATED example.
 3. Any generated example must be explicitly labeled:
    "GENERATED EXAMPLE (not from documentation)".
+4. If helpful, you may include relevant source URLs that appear in the provided context.
 """.strip()
 
 

@@ -1,4 +1,4 @@
-import math
+﻿import math
 import re
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -72,6 +72,7 @@ class QueryPipeline:
         self._bm25_idf = {}
         self._bm25_k1 = 1.5
         self._bm25_b = 0.75
+        self._last_used_sources: List[Dict[str, str]] = []
 
     # ---------------- Core entrypoint ----------------
     def query(self, question: str, retry_on_empty: bool = False, memory_context: str = "") -> str:
@@ -433,7 +434,7 @@ class QueryPipeline:
             return (score + boost, origin_pri, -meta_rank)
 
         combined.sort(key=rank_key, reverse=True)
-        max_per_parent = 2  # allow up to 2 segments from the same page; tune 1–3
+        max_per_parent = 2  # allow up to 2 segments from the same page; tune 1â€“3
         by_parent = {}
         parent_limited = []
         for r in combined:
@@ -559,6 +560,7 @@ class QueryPipeline:
         section_groups: Dict[str, List[str]] = defaultdict(list)
         seen_ids = set()
         total = 0
+        used_sources: List[Dict[str, str]] = []
 
         for r in results:
             uid = r.get("id") or f"{r.get('url','')}#chunk_{r.get('chunk_index',-1)}"
@@ -582,11 +584,25 @@ class QueryPipeline:
                     top = (r.get("hierarchy") or ["General"])[0]
                     section_groups[top].append(preview)
                     total += len(preview)
+                    used_sources.append(
+                        {
+                            "chunk_id": str(uid),
+                            "url": str(url),
+                            "section": str(top),
+                        }
+                    )
                 break
 
             top_level = (r.get("hierarchy") or ["General"])[0]
             section_groups[top_level].append(chunk_text)
             total += len(chunk_text)
+            used_sources.append(
+                {
+                    "chunk_id": str(uid),
+                    "url": str(url),
+                    "section": str(top_level),
+                }
+            )
 
             if total >= max_chars:
                 break
@@ -597,19 +613,30 @@ class QueryPipeline:
             if full:
                 blocks.append(full)
 
+        self._last_used_sources = used_sources
         return "\n\n---\n\n".join(blocks).strip()
 
     def _compute_budget_chars(self, question: str) -> int:
         """
-        Adaptive context size. If the underlying model looks like GPT‑4o with large window,
-        let the context breathe (while capping to a safe ceiling). Otherwise, fall back to
-        the configured max_context_chars.
+        Adaptive context size based on model context window when available.
+        We reserve room for instructions, user question, and model output.
         """
         base = max(self.max_context_chars, 8000)  # never go below 8k chars
-        model_name = getattr(self.chat_agent.chatbot, "model_name", "").lower()
-        # Very rough heuristic: 1 token ~ 4 chars. Keep a safety margin for prompts & answer.
-        if "gpt-4o" in model_name or "4o" in model_name:
-            return min(int(base * 3), 60000)  # up to ~60k chars when possible
+        chatbot = getattr(self.chat_agent, "chatbot", None)
+        context_window = getattr(chatbot, "context_window_tokens", None)
+
+        # Preferred path: explicit model context window from the chatbot wrapper.
+        if isinstance(context_window, int) and context_window > 0:
+            # Reserve at least 2k tokens, or 15% of window, for system/user/answer overhead.
+            reserve_tokens = max(2000, int(context_window * 0.15))
+            usable_tokens = max(2000, context_window - reserve_tokens)
+            # Rough conversion: 1 token ~ 4 chars. Cap to avoid extreme prompt sizes.
+            return max(base, min(int(usable_tokens * 4), 180000))
+
+        model_name = (getattr(chatbot, "model_name", None) or getattr(chatbot, "model", "")).lower()
+        # Fallback heuristic for wrappers without explicit context metadata.
+        if "gpt-4o" in model_name or "4o" in model_name or "gpt-4.1" in model_name:
+            return min(int(base * 5), 100000)
         return base
 
     def _fallback_message(self, results: List[Dict[str, Any]], question: str) -> str:
@@ -657,10 +684,7 @@ class QueryPipeline:
         Includes explicit uncertainty + concept-oriented links for follow-up reading.
         """
         missing = coverage.get("missing") or []
-        covered = coverage.get("covered") or []
-        used_urls = self._extract_used_urls_from_context(context)
-        used_set = set(used_urls)
-        used_results = [r for r in results if (r.get("url") or r.get("source")) in used_set] if used_set else []
+        used_urls = self._read_more_urls_from_used_sources(limit=3)
 
         if missing:
             guided_question = (
@@ -674,21 +698,26 @@ class QueryPipeline:
         else:
             base_answer = self.chat_agent.answer(question_for_answer, context).strip()
 
-        link_targets = missing if missing else covered or concepts
-        link_map = self._helpful_links_by_concept(link_targets, used_results)
+        if not used_urls:
+            return base_answer
 
-        lines = []
-        if link_map:
-            lines.append("Read more:")
-            for concept, urls in link_map.items():
-                lines.append(f"- {concept}: {', '.join(urls)}")
-        else:
-            lines.append("Read more:")
-            fallback_links = used_urls or self._top_distinct_urls(used_results, limit=3)
-            for u in fallback_links[:3]:
-                lines.append(f"- {u}")
-
+        lines = ["Read more:"]
+        for u in used_urls:
+            lines.append(f"- {u}")
         return f"{base_answer}\n\n" + "\n".join(lines)
+
+    def _read_more_urls_from_used_sources(self, limit: int = 3) -> List[str]:
+        links = []
+        seen = set()
+        for src in self._last_used_sources:
+            url = str(src.get("url") or "").strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            links.append(url)
+            if len(links) >= limit:
+                break
+        return links
 
     def _helpful_links_by_concept(
         self, concepts: List[str], results: List[Dict[str, Any]], max_links_per_concept: int = 2
@@ -741,3 +770,4 @@ class QueryPipeline:
             seen.add(url)
             links.append(url)
         return links
+
