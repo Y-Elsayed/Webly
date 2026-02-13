@@ -658,6 +658,9 @@ class QueryPipeline:
         """
         missing = coverage.get("missing") or []
         covered = coverage.get("covered") or []
+        used_urls = self._extract_used_urls_from_context(context)
+        used_set = set(used_urls)
+        used_results = [r for r in results if (r.get("url") or r.get("source")) in used_set] if used_set else []
 
         if missing:
             guided_question = (
@@ -672,7 +675,7 @@ class QueryPipeline:
             base_answer = self.chat_agent.answer(question_for_answer, context).strip()
 
         link_targets = missing if missing else covered or concepts
-        link_map = self._helpful_links_by_concept(link_targets, results)
+        link_map = self._helpful_links_by_concept(link_targets, used_results)
 
         lines = []
         if link_map:
@@ -681,7 +684,8 @@ class QueryPipeline:
                 lines.append(f"- {concept}: {', '.join(urls)}")
         else:
             lines.append("Read more:")
-            for u in self._top_distinct_urls(results, limit=3):
+            fallback_links = used_urls or self._top_distinct_urls(used_results, limit=3)
+            for u in fallback_links[:3]:
                 lines.append(f"- {u}")
 
         return f"{base_answer}\n\n" + "\n".join(lines)
@@ -726,4 +730,14 @@ class QueryPipeline:
             links.append(url)
             if len(links) >= limit:
                 break
+        return links
+
+    def _extract_used_urls_from_context(self, context: str) -> List[str]:
+        links = []
+        seen = set()
+        for url in re.findall(r"\(Source:\s*(https?://[^\s\)]+)\)", context or ""):
+            if url in seen:
+                continue
+            seen.add(url)
+            links.append(url)
         return links
