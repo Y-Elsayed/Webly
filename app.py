@@ -211,6 +211,7 @@ def ensure_chat_payload_shape(payload):
     payload.setdefault("settings", {"score_threshold": 0.5})
     payload.setdefault("messages", [])
     payload["settings"].setdefault("score_threshold", 0.5)
+    payload["settings"].setdefault("memory_reset_at", 0)
     return payload
 
 
@@ -237,6 +238,18 @@ def build_memory_context(messages, max_chars: int = 2000, leave_last_k: int = 0)
         buf.append(line)
         total += len(line) + 1
     return "\n".join(reversed(buf)).strip()
+
+
+def _messages_for_memory(payload: dict) -> list:
+    msgs = list(payload.get("messages", []))
+    settings = payload.get("settings", {}) or {}
+    try:
+        reset_at = int(settings.get("memory_reset_at", 0) or 0)
+    except Exception:
+        reset_at = 0
+    if reset_at <= 0:
+        return msgs
+    return msgs[reset_at:]
 
 
 def rebuild_pipelines_for_project(project: str, api_key: str | None = None):
@@ -560,17 +573,15 @@ if projects and st.session_state.get("active_project"):
             with c2:
                 if st.button("Clear memory", key=f"clear_{chat_name}"):
                     if st.session_state.get("active_chat") == chat_name:
-                        st.session_state.chat_payload = {
-                            "title": chat_name,
-                            "settings": {"score_threshold": cfg.get("score_threshold", 0.5)},
-                            "messages": [],
-                        }
-                        manager.save_chat(current_project, chat_name, st.session_state.chat_payload)
+                        payload = ensure_chat_payload_shape(st.session_state.get("chat_payload", {}))
+                        payload["settings"]["memory_reset_at"] = len(payload.get("messages", []))
+                        st.session_state.chat_payload = payload
+                        manager.save_chat(current_project, chat_name, payload)
                     else:
-                        # Clear memory even if not active
+                        # Clear memory even if not active (keep chat history intact)
                         payload = manager.load_chat(current_project, chat_name)
                         payload = ensure_chat_payload_shape(payload)
-                        payload["messages"] = []
+                        payload["settings"]["memory_reset_at"] = len(payload.get("messages", []))
                         manager.save_chat(current_project, chat_name, payload)
                     st.rerun()
             with c3:
@@ -614,7 +625,7 @@ if projects and st.session_state.get("active_project"):
                         else:
                             try:
                                 memory_ctx = build_memory_context(
-                                    payload["messages"][:-1],
+                                    _messages_for_memory(payload)[:-1],
                                     max_chars=2000,
                                     leave_last_k=int(cfg_cur.get("leave_last_k", 0) or 0),
                                 )
@@ -626,7 +637,7 @@ if projects and st.session_state.get("active_project"):
                     else:
                         try:
                             memory_ctx = build_memory_context(
-                                payload["messages"][:-1],
+                                _messages_for_memory(payload)[:-1],
                                 max_chars=2000,
                                 leave_last_k=int(cfg_cur.get("leave_last_k", 0) or 0),
                             )
