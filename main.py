@@ -92,7 +92,8 @@ def build_pipelines(config, api_key: str | None = None):
 
     query_pipeline = None
     if chatbot is not None:
-        agent = WeblyChatAgent(embedder, db, chatbot)
+        configured_system_prompt = (config.get("system_prompt") or "").strip() or None
+        agent = WeblyChatAgent(embedder, db, chatbot, system_prompt=configured_system_prompt)
         query_pipeline = QueryPipeline(
             chat_agent=agent,
             debug=bool(config.get("query_debug", True)),

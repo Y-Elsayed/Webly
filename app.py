@@ -128,6 +128,22 @@ def _results_file_ready(output_dir: str, results_file: str) -> bool:
     return os.path.exists(path) and os.path.getsize(path) > 0
 
 
+def _default_system_prompt_text() -> str:
+    prompt_path = os.path.join(APP_DIR, "chatbot", "prompts", "webly_chat_agent_system.txt")
+    try:
+        with open(prompt_path, encoding="utf-8") as f:
+            text = f.read().strip()
+            if text:
+                return text
+    except Exception:
+        pass
+    return (
+        "You are a helpful assistant that answers questions based solely on the content of a specific website.\n"
+        "Never use outside knowledge.\n"
+        "If the answer is not in the provided context, respond only with: `N`."
+    )
+
+
 # ------------------------------------------------------------------------------------
 # Storage / Projects
 # ------------------------------------------------------------------------------------
@@ -289,6 +305,7 @@ with st.sidebar:
                         "allowed_domains": [d.strip() for d in new_domains.split(",") if d.strip()],
                         "embedding_model": EMBEDDER_OPTIONS[embed_choice],
                         "chat_model": "gpt-4o-mini",
+                        "system_prompt": _default_system_prompt_text(),
                         "summary_model": "",
                         "score_threshold": 0.5,
                         "retrieval_mode": "builder",
@@ -711,6 +728,12 @@ if projects and st.session_state.get("active_project"):
                 placeholder="gpt-4o-mini",
                 help="Example: gpt-4o-mini",
             )
+            system_prompt_input = st.text_area(
+                "System prompt (optional, per project)",
+                cfg.get("system_prompt") or _default_system_prompt_text(),
+                height=180,
+                help="Leave empty to use Webly's default prompt from chatbot/prompts/webly_chat_agent_system.txt.",
+            )
             summary_model = st.text_input(
                 "Summary model (optional)",
                 cfg.get("summary_model", ""),
@@ -786,6 +809,7 @@ if projects and st.session_state.get("active_project"):
             cfg_edit["results_file"] = results_file_input
 
             cfg_edit["chat_model"] = chat_model
+            cfg_edit["system_prompt"] = system_prompt_input
             cfg_edit["summary_model"] = summary_model
             cfg_edit["score_threshold"] = float(score_threshold)
             cfg_edit["retrieval_mode"] = retrieval_mode
