@@ -15,7 +15,7 @@ class ChatGPTModel(Chatbot):
     @staticmethod
     def _infer_context_window_tokens(model: str) -> int:
         """
-        Hard coded it for now, but later we can use the openai client to fetch the model details. (I know it's not the best way to do it, but it's a quick sol for now ;)
+        Hard coded it for now, but later we can use the openai client to fetch the model details.
         """
         m = (model or "").lower()
         if "gpt-4.1" in m:
