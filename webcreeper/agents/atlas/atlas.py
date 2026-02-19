@@ -129,13 +129,13 @@ class Atlas(BaseAgent):
 
         host = urlparse(url).netloc
         allowed_domains = self._effective_allowed_domains(self.settings.get("base_url") or url)
+        allow_sub = self.settings.get("allow_subdomains", False)
+        norm_host = self._norm_host(host)
+        norms = [self._norm_host(d) for d in allowed_domains]
+        ok = True
 
         # If there is an allow-list, enforce it
         if allowed_domains:
-            allow_sub = self.settings.get("allow_subdomains", False)  # default exact-only
-            norm_host = self._norm_host(host)
-            norms = [self._norm_host(d) for d in allowed_domains]
-
             if allow_sub:
                 ok = any(norm_host == d or norm_host.endswith("." + d) for d in norms)
             else:
@@ -417,7 +417,7 @@ class Atlas(BaseAgent):
     def _save_result(self, result: dict):
         if not isinstance(result, dict):
             return
-        if "url" not in result or "html" not in result or not result["html"]:
+        if "url" not in result:
             self.logger.debug(f"Skipping result due to missing fields: {result}")
             return
         if self.settings["save_results"]:
