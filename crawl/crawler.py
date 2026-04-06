@@ -1,9 +1,10 @@
 from webcreeper.agents.atlas.atlas import Atlas
 
+from .base_crawler import BaseCrawler
 from .handlers import HTMLSaver
 
 
-class Crawler:
+class Crawler(BaseCrawler):
     def __init__(
         self,
         start_url: str,
@@ -29,6 +30,12 @@ class Crawler:
 
         if default_settings:
             self.default_settings.update(default_settings)
+
+    def get_disallowed_report(self):
+        try:
+            return self._atlas.get_disallowed_report() if hasattr(self, "_atlas") else {}
+        except Exception:
+            return {}
 
     def crawl(self, on_page_crawled=None, settings_override=None, save_sitemap=True):
         settings = self.default_settings.copy()

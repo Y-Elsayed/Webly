@@ -265,7 +265,9 @@ class QueryPipeline:
             coverage = self.context_builder.coverage_report(concepts, saved_results)
             missing = coverage.get("missing") or []
             if self.debug:
-                self.logger.debug(f"[builder] Round {i + 1} coverage: covered={coverage.get('covered')} missing={missing}")
+                self.logger.debug(
+                    f"[builder] Round {i + 1} coverage: covered={coverage.get('covered')} missing={missing}"
+                )
             if not missing:
                 break
             decision = self.context_builder.decide_followups(question_for_search, missing, saved_results)
@@ -781,4 +783,3 @@ class QueryPipeline:
             seen.add(url)
             links.append(url)
         return links
-
