@@ -1,11 +1,62 @@
 import hashlib
 import re
+from abc import ABC, abstractmethod
 from typing import Dict, List, Tuple
 
 from bs4 import BeautifulSoup, Tag
 
 
-class SlidingTextChunker:
+class TextChunker(ABC):
+    """
+    Interface for HTML/text chunking strategies.
+
+    Implement this to swap in your own chunking logic — recursive
+    character splitting, semantic paragraph splitting, fixed-token
+    windows, or anything else.
+
+    ``SemanticPageProcessor`` accepts any ``TextChunker`` in its
+    constructor, so no other code changes are needed.
+
+    Example::
+
+        class FixedTokenChunker(TextChunker):
+            def __init__(self, max_tokens: int = 512):
+                self.max_tokens = max_tokens
+
+            def chunk_html(self, html: str, url: str = "") -> List[Dict]:
+                # strip HTML, split by token count
+                text = strip_tags(html)
+                return [
+                    {"text": chunk, "hierarchy": [], "outgoing_links": []}
+                    for chunk in split_by_tokens(text, self.max_tokens)
+                ]
+    """
+
+    @abstractmethod
+    def chunk_html(self, html: str, url: str = "") -> List[Dict]:
+        """Split raw HTML into structured chunks.
+
+        Args:
+            html: Raw HTML string of the page.
+            url:  Canonical URL of the page (used for stable chunk IDs
+                  and resolving relative links).
+
+        Returns:
+            List of chunk dicts.  Each dict must contain at least:
+
+            - ``"text"`` (str): The plain-text content of the chunk.
+
+            Optional but used by the pipeline when present:
+
+            - ``"hierarchy"`` (List[str]): Heading breadcrumb, e.g.
+              ``["Getting Started", "Installation"]``.
+            - ``"outgoing_links"`` (List[Dict]): Links found in this
+              chunk, each with ``"target"`` and ``"anchor_text"`` keys.
+            - ``"id"`` (str): Stable deterministic ID for graph joins.
+        """
+
+
+class SlidingTextChunker(TextChunker):
     def __init__(self, max_words: int = 350, overlap: int = 50):
         self.max_words = max_words
         self.overlap = overlap

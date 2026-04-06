@@ -175,6 +175,7 @@ cython_debug/
 
 # personal files
 .env
+.claude/
 log/
 out*/
 config.json
