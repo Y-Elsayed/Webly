@@ -6,7 +6,7 @@ from typing import List
 
 from openai import APIConnectionError, APIStatusError, OpenAI, RateLimitError
 
-from embedder.base_embedder import Embedder
+from .base_embedder import Embedder
 
 logger = logging.getLogger(__name__)
 

@@ -1,7 +1,6 @@
 import streamlit as st
-
-from ui.helpers import _index_dir_ready, _results_file_ready
-from ui.project import rebuild_pipelines_for_project
+from webly.ui.helpers import _index_dir_ready, _results_file_ready
+from webly.ui.project import rebuild_pipelines_for_project
 
 
 def render_run_tab(current_project: str, cfg: dict, manager):

@@ -4,8 +4,8 @@ import os
 import re
 from typing import Any, Dict, List
 
-from embedder.base_embedder import Embedder
-from vector_index.vector_db import VectorDatabase
+from webly.embedder.base_embedder import Embedder
+from webly.vector_index.vector_db import VectorDatabase
 
 
 class EmbedAndStorePipeline:

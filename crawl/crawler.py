@@ -1,4 +1,4 @@
-from webcreeper.agents.atlas.atlas import Atlas
+from webly.webcreeper.agents.atlas.atlas import Atlas
 
 from .base_crawler import BaseCrawler
 from .handlers import HTMLSaver

@@ -4,18 +4,18 @@ import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
-from crawl.crawler import Crawler
-from embedder.base_embedder import Embedder
-from vector_index.vector_db import VectorDatabase
+from webly.crawl.crawler import Crawler
+from webly.embedder.base_embedder import Embedder
+from webly.vector_index.vector_db import VectorDatabase
 
 try:
-    from processors.text_summarizer import TextSummarizer
+    from webly.processors.text_summarizer import TextSummarizer
 except ImportError:
     TextSummarizer = object
-from processors.page_processor import SemanticPageProcessor
-from processors.text_chunkers import DefaultChunker
-from processors.text_extractors import DefaultTextExtractor
-from webcreeper.creeper_core.utils import configure_logging
+from webly.processors.page_processor import SemanticPageProcessor
+from webly.processors.text_chunkers import DefaultChunker
+from webly.processors.text_extractors import DefaultTextExtractor
+from webly.webcreeper.creeper_core.utils import configure_logging
 
 
 class IngestPipeline:

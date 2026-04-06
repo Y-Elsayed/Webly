@@ -1,14 +1,13 @@
 import streamlit as st
-
-from storage.storage_manager import StorageManager
-from ui.project import load_project_config
-from ui.sidebar import render_sidebar
-from ui.state import STORAGE_ROOT, _init_state
-from ui.styles import inject_styles
-from ui.tabs.chat import render_chat_tab
-from ui.tabs.overview import render_overview_tab
-from ui.tabs.run import render_run_tab
-from ui.tabs.settings import render_settings_tab
+from webly.storage.storage_manager import StorageManager
+from webly.ui.project import load_project_config
+from webly.ui.sidebar import render_sidebar
+from webly.ui.state import STORAGE_ROOT, _init_state
+from webly.ui.styles import inject_styles
+from webly.ui.tabs.chat import render_chat_tab
+from webly.ui.tabs.overview import render_overview_tab
+from webly.ui.tabs.run import render_run_tab
+from webly.ui.tabs.settings import render_settings_tab
 
 st.set_page_config(page_title="Webly", layout="wide")
 inject_styles()
