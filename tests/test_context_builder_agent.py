@@ -1,4 +1,4 @@
-from chatbot.context_builder_agent import ContextBuilderAgent
+from webly.chatbot.context_builder_agent import ContextBuilderAgent
 
 
 class DummyPlannerLLM:

@@ -1,9 +1,9 @@
 import os
 
 import streamlit as st
-from webly.ui.state import STORAGE_ROOT
 
 from webly import build_pipelines
+from webly.ui.state import STORAGE_ROOT
 
 
 def load_project_config(project: str, manager) -> dict:

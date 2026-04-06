@@ -1,4 +1,4 @@
-from chatbot.prompts.system_prompts import (
+from webly.chatbot.prompts.system_prompts import (
     AnsweringMode,
     apply_mode_flags,
     get_system_prompt,

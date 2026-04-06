@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 np = pytest.importorskip("numpy", exc_type=ImportError)
-FaissDatabase = pytest.importorskip("vector_index.faiss_db", exc_type=ImportError).FaissDatabase
+FaissDatabase = pytest.importorskip("webly.vector_index.faiss_db", exc_type=ImportError).FaissDatabase
 
 
 def test_faiss_add_search_save_load(tmp_path: Path):
@@ -23,6 +23,8 @@ def test_faiss_add_search_save_load(tmp_path: Path):
 
     path = tmp_path / "index"
     db.save(str(path))
+    assert (path / "metadata.json").is_file()
+    assert not (path / "metadata.meta").exists()
 
     db2 = FaissDatabase()
     db2.load(str(path))

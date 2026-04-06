@@ -3,16 +3,16 @@ import sys
 import types
 from pathlib import Path
 
-# Provide a lightweight stub for processors.text_summarizer to avoid importing tiktoken
-_stub_sum = types.ModuleType("processors.text_summarizer")
+# Provide a lightweight stub for webly.processors.text_summarizer to avoid importing tiktoken
+_stub_sum = types.ModuleType("webly.processors.text_summarizer")
 _stub_sum.TextSummarizer = object
-sys.modules.setdefault("processors.text_summarizer", _stub_sum)
+sys.modules.setdefault("webly.processors.text_summarizer", _stub_sum)
 
-_stub_ext = types.ModuleType("processors.text_extractors")
+_stub_ext = types.ModuleType("webly.processors.text_extractors")
 _stub_ext.DefaultTextExtractor = object
-sys.modules.setdefault("processors.text_extractors", _stub_ext)
+sys.modules.setdefault("webly.processors.text_extractors", _stub_ext)
 
-from pipeline.ingest_pipeline import IngestPipeline  # noqa: E402
+from webly.pipeline.ingest_pipeline import IngestPipeline  # noqa: E402
 
 
 class DummyCrawler:
