@@ -1,8 +1,8 @@
 # Webly
 
 ![CI](https://github.com/Y-Elsayed/webly/actions/workflows/ci.yml/badge.svg)
-![Webly Logo](./webly-logo.png)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Y-Elsayed/Webly)
+![Webly Logo](./webly-logo.png)
 
 Webly is a modular website-to-RAG framework. It crawls websites, extracts and chunks content, embeds it, stores vectors, and provides a chat/search interface over that knowledge.
 
