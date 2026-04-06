@@ -1,9 +1,12 @@
 import json
+import logging
 import string
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 from chatbot.base_chatbot import Chatbot
+
+logger = logging.getLogger(__name__)
 
 
 class WeblyChatAgent:
@@ -41,8 +44,8 @@ class WeblyChatAgent:
             text = prompt_path.read_text(encoding="utf-8").strip()
             if text:
                 return text
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not load system prompt from {prompt_path}: {e}")
 
         return (
             "You are a helpful assistant that answers questions based solely on the content of a specific website.\n"

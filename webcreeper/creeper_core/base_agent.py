@@ -1,3 +1,4 @@
+import ipaddress
 import re
 import time
 import urllib.robotparser as robotparser
@@ -324,9 +325,33 @@ class BaseAgent(ABC):
                 self.blacklist.add(url)
                 return None
 
+    # -------------------- SSRF guard --------------------
+
+    def _is_ssrf_target(self, url: str) -> bool:
+        """Return True if the URL targets a private/loopback/internal address or non-HTTP scheme."""
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return True
+        hostname = (parsed.hostname or "").lower()
+        _BLOCKED_NAMES = {"localhost", "metadata.google.internal", "169.254.169.254"}
+        if hostname in _BLOCKED_NAMES:
+            return True
+        try:
+            addr = ipaddress.ip_address(hostname)
+            if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved or addr.is_multicast:
+                return True
+        except ValueError:
+            pass  # not a bare IP literal; DNS name allowed
+        return False
+
     # -------------------- visit policy --------------------
 
     def should_visit(self, url: str) -> bool:
+        # SSRF guard: block private/internal addresses and non-HTTP schemes
+        if self._is_ssrf_target(url):
+            self._mark_disallowed(url, "Blocked: private/internal address or non-HTTP(S) scheme")
+            return False
+
         # Already visited?
         if url in self.visited:
             self._mark_disallowed(url, "Already visited")

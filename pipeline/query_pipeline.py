@@ -1,4 +1,5 @@
-﻿import math
+﻿import logging
+import math
 import re
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -61,6 +62,7 @@ class QueryPipeline:
         self.retrieval_mode = retrieval_mode
         self.builder_max_rounds = max(0, int(builder_max_rounds))
         self.context_builder = ContextBuilderAgent(planner_llm=getattr(self.chat_agent, "chatbot", None))
+        self.logger = logging.getLogger(self.__class__.__name__)
 
         # Hybrid retrieval (BM25) cache
         self._bm25_ready = False
@@ -80,9 +82,9 @@ class QueryPipeline:
             return self._query_builder(question, retry_on_empty=retry_on_empty, memory_context=memory_context)
 
         if self.debug:
-            print(f"\n[DEBUG] User query: {question}")
+            self.logger.debug(f"User query: {question}")
             if memory_context:
-                print(f"[DEBUG] Memory context length: {len(memory_context)} chars")
+                self.logger.debug(f"Memory context length: {len(memory_context)} chars")
 
         question_for_search = f"{memory_context}\n{question}".strip() if memory_context else question
         question_for_answer = f"{memory_context}\nUser: {question}".strip() if memory_context else question
@@ -90,12 +92,12 @@ class QueryPipeline:
         # === Pass 1: initial search ===
         initial_results = self._search(question_for_search, self.top_k_first_pass, tag="initial")
         if self.debug:
-            print(f"[DEBUG] Initial results ({len(initial_results)}): {[r.get('id') for r in initial_results]}")
+            self.logger.debug(f"Initial results ({len(initial_results)}): {[r.get('id') for r in initial_results]}")
 
         if retry_on_empty and not initial_results and self.recrawl_fn:
             try:
                 self.chat_agent.logger.info("[QueryPipeline] No context found. Triggering re-crawl.")
-            except Exception:
+            except AttributeError:
                 pass
             self.recrawl_fn()
             initial_results = self._search(question_for_search, self.top_k_first_pass, tag="initial-after-recrawl")
@@ -111,12 +113,12 @@ class QueryPipeline:
         if self.enable_graph_expansion:
             graph_expanded = self._expand_via_graph(question, seeds)
             if self.debug and graph_expanded:
-                print(f"[DEBUG] Graph expansion added {len(graph_expanded)} results")
+                self.logger.debug(f"Graph expansion added {len(graph_expanded)} results")
             saved_results.extend(graph_expanded)
         if self.enable_section_expansion:
             section_expanded = self._expand_via_section(question, seeds)
             if self.debug and section_expanded:
-                print(f"[DEBUG] Section expansion added {len(section_expanded)} results")
+                self.logger.debug(f"Section expansion added {len(section_expanded)} results")
             saved_results.extend(section_expanded)
 
         # Combine, dedupe, and prepare first context
@@ -125,7 +127,7 @@ class QueryPipeline:
 
         context = self._assemble_context(combined, max_chars=self._compute_budget_chars(question))
         if self.debug:
-            print(f"[DEBUG] Context v1 length: {len(context)} chars")
+            self.logger.debug(f"Context v1 length: {len(context)} chars")
 
         # If we can already answer, do it
         if self.enable_answerability_check and self.chat_agent._judge_answerability(question_for_answer, context):
@@ -143,7 +145,7 @@ class QueryPipeline:
             hints = self._collect_hints_for_rewrite(combined)
             rewrites = self.chat_agent.rewrite_query(question_for_search, hints)
             if self.debug:
-                print(f"[DEBUG] Hop {hop} rewrites: {rewrites}")
+                self.logger.debug(f"Hop {hop} rewrites: {rewrites}")
 
             if not rewrites:
                 break
@@ -160,18 +162,18 @@ class QueryPipeline:
                 hop_results.extend(self._search(q, self.top_k_second_pass, tag="rewrite"))
 
             if self.debug and hop_results:
-                print(f"[DEBUG] Hop {hop} rewritten results: {[r.get('id') for r in hop_results]}")
+                self.logger.debug(f"Hop {hop} rewritten results: {[r.get('id') for r in hop_results]}")
 
             # Optional expansions on hop results
             if self.enable_graph_expansion and hop_results:
                 hop_graph = self._expand_via_graph(question, hop_results)
                 if self.debug and hop_graph:
-                    print(f"[DEBUG] Hop {hop} graph expansion added {len(hop_graph)} results")
+                    self.logger.debug(f"Hop {hop} graph expansion added {len(hop_graph)} results")
                 hop_results.extend(hop_graph)
             if self.enable_section_expansion and hop_results:
                 hop_section = self._expand_via_section(question, hop_results)
                 if self.debug and hop_section:
-                    print(f"[DEBUG] Hop {hop} section expansion added {len(hop_section)} results")
+                    self.logger.debug(f"Hop {hop} section expansion added {len(hop_section)} results")
                 hop_results.extend(hop_section)
 
             # Merge with what we already have and re-assemble context
@@ -179,7 +181,7 @@ class QueryPipeline:
             combined = self._combine_and_rerank(saved_results)[: self.max_results_to_consider]
             context = self._assemble_context(combined, max_chars=self._compute_budget_chars(question))
             if self.debug:
-                print(f"[DEBUG] Context after hop {hop}: {len(context)} chars")
+                self.logger.debug(f"Context after hop {hop}: {len(context)} chars")
 
             if self.enable_answerability_check and self.chat_agent._judge_answerability(question_for_answer, context):
                 return self.chat_agent.answer(question_for_answer, context)
@@ -193,9 +195,9 @@ class QueryPipeline:
 
     def _query_builder(self, question: str, retry_on_empty: bool = False, memory_context: str = "") -> str:
         if self.debug:
-            print(f"\n[DEBUG] [builder] User query: {question}")
+            self.logger.debug(f"[builder] User query: {question}")
             if memory_context:
-                print(f"[DEBUG] [builder] Memory context length: {len(memory_context)} chars")
+                self.logger.debug(f"[builder] Memory context length: {len(memory_context)} chars")
 
         route = self.context_builder.plan_initial_route(question=question, memory_context=memory_context)
         route_mode = str(route.get("mode") or "retrieve_new")
@@ -203,8 +205,8 @@ class QueryPipeline:
         concepts = route.get("concepts") if isinstance(route.get("concepts"), list) else []
 
         if self.debug:
-            print(
-                f"[DEBUG] [builder] Route mode={route_mode}, "
+            self.logger.debug(
+                f"[builder] Route mode={route_mode}, "
                 f"standalone_query={standalone_query}, concepts={concepts}"
             )
 
@@ -233,15 +235,15 @@ class QueryPipeline:
 
         initial_results = self._search(question_for_search, self.top_k_first_pass, tag="initial")
         if self.debug:
-            print(
-                f"[DEBUG] [builder] Initial results ({len(initial_results)}): "
+            self.logger.debug(
+                f"[builder] Initial results ({len(initial_results)}): "
                 f"{[r.get('id') for r in initial_results]}"
             )
 
         if retry_on_empty and not initial_results and self.recrawl_fn:
             try:
                 self.chat_agent.logger.info("[QueryPipeline] No context found. Triggering re-crawl.")
-            except Exception:
+            except AttributeError:
                 pass
             self.recrawl_fn()
             initial_results = self._search(question_for_search, self.top_k_first_pass, tag="initial-after-recrawl")
@@ -255,7 +257,7 @@ class QueryPipeline:
         if not concepts:
             concepts = self.context_builder.extract_concepts(question_for_search)
         if self.debug:
-            print(f"[DEBUG] [builder] Concepts: {concepts}")
+            self.logger.debug(f"[builder] Concepts: {concepts}")
 
         # Minimal builder loop: request targeted searches only for missing concepts.
         coverage = self.context_builder.coverage_report(concepts, saved_results)
@@ -263,7 +265,7 @@ class QueryPipeline:
             coverage = self.context_builder.coverage_report(concepts, saved_results)
             missing = coverage.get("missing") or []
             if self.debug:
-                print(f"[DEBUG] [builder] Round {i + 1} coverage: covered={coverage.get('covered')} missing={missing}")
+                self.logger.debug(f"[builder] Round {i + 1} coverage: covered={coverage.get('covered')} missing={missing}")
             if not missing:
                 break
             decision = self.context_builder.decide_followups(question_for_search, missing, saved_results)
@@ -276,8 +278,8 @@ class QueryPipeline:
                 ]
             extra_queries = decision.get("queries") or []
             if self.debug:
-                print(
-                    f"[DEBUG] [builder] Round {i + 1} decision: "
+                self.logger.debug(
+                    f"[builder] Round {i + 1} decision: "
                     f"queries={extra_queries}, drop_chunk_ids={list(drop_ids)}"
                 )
             if not extra_queries:
@@ -289,9 +291,9 @@ class QueryPipeline:
         context = self._assemble_context(combined, max_chars=self._compute_budget_chars(question))
         coverage = self.context_builder.coverage_report(concepts, combined)
         if self.debug:
-            print(f"[DEBUG] [builder] Context length: {len(context)} chars")
-            print(
-                f"[DEBUG] [builder] Final coverage: "
+            self.logger.debug(f"[builder] Context length: {len(context)} chars")
+            self.logger.debug(
+                f"[builder] Final coverage: "
                 f"covered={coverage.get('covered')} missing={coverage.get('missing')}"
             )
 

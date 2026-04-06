@@ -10,7 +10,7 @@ from vector_index.vector_db import VectorDatabase
 
 try:
     from processors.text_summarizer import TextSummarizer
-except Exception:
+except ImportError:
     TextSummarizer = object
 from processors.page_processor import SemanticPageProcessor
 from processors.text_chunkers import DefaultChunker
@@ -227,7 +227,8 @@ class IngestPipeline:
         try:
             with open(resolved_results, "r", encoding="utf-8") as count_f:
                 total_lines = sum(1 for _ in count_f)
-        except Exception:
+        except Exception as e:
+            self.logger.debug(f"Could not count lines in results file: {e}")
             total_lines = None
 
         with open(resolved_results, "r", encoding="utf-8") as f:
@@ -249,8 +250,8 @@ class IngestPipeline:
                     if self.progress_callback:
                         try:
                             self.progress_callback(idx, total_lines, url)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            self.logger.debug(f"Progress callback error: {e}")
 
                     for chunk in chunks:
                         content_to_embed = chunk.get("text", "")
@@ -412,8 +413,8 @@ class IngestPipeline:
                         report_path = os.path.join(dbg_dir, "disallowed_report.json")
                         with open(report_path, "w", encoding="utf-8") as fp:
                             json.dump(report, fp, indent=2)
-                except Exception:
-                    pass
+                except Exception as e:
+                    self.logger.warning(f"Failed to write disallowed report: {e}")
 
                 # >>> handled return instead of raising <<<
                 msg = (

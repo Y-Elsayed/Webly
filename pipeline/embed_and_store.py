@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 from typing import Any, Dict, List
@@ -35,12 +36,13 @@ class EmbedAndStorePipeline:
         self.index_path = index_path
         self.embedding_field = embedding_field
         self.batch_size = batch_size
+        self.logger = logging.getLogger(self.__class__.__name__)
 
     def run(self):
         """
         Reads the results file, generates embeddings, and stores them in the DB.
         """
-        print(f"[EmbedAndStorePipeline] Reading: {self.results_path}")
+        self.logger.info(f"Reading: {self.results_path}")
         if not os.path.exists(self.results_path):
             raise FileNotFoundError(f"{self.results_path} does not exist.")
 
@@ -52,7 +54,7 @@ class EmbedAndStorePipeline:
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError as e:
-                    print(f"[EmbedAndStorePipeline] Skipping line {line_num}: JSON decode error ({e})")
+                    self.logger.warning(f"Skipping line {line_num}: JSON decode error ({e})")
                     continue
 
                 content = record.get(self.embedding_field)
@@ -65,9 +67,8 @@ class EmbedAndStorePipeline:
                 for seg_idx, part in enumerate(parts):
                     embedding = self.embedder.embed(part)
                     if embedding is None:
-                        print(
-                            "[EmbedAndStorePipeline] Skipping record at "
-                            f"line {line_num} seg {seg_idx} - embedding failed."
+                        self.logger.warning(
+                            f"Skipping record at line {line_num} seg {seg_idx} - embedding failed."
                         )
                         continue
 
@@ -100,7 +101,7 @@ class EmbedAndStorePipeline:
                 self.db.add(buffer)
 
         self.db.save(self.index_path)
-        print(f"[EmbedAndStorePipeline] Saved index to: {self.index_path}")
+        self.logger.info(f"Saved index to: {self.index_path}")
 
     # --- token-safe embedding helpers ---
     def _max_input_tokens(self) -> int:
