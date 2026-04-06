@@ -7,6 +7,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -14,15 +18,46 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
+          pip install build
 
       - name: Lint (ruff)
         run: ruff check .
 
       - name: Run tests
         run: pytest
+
+      - name: Install package smoke test
+        run: |
+          pip install . --no-deps
+          python - <<'PY'
+          import webly
+          assert callable(webly.build_pipelines)
+          print("package install smoke ok")
+          PY
+
+      - name: Build distribution artifacts
+        run: python -m build
+
+      - name: Wheel install smoke test
+        run: |
+          python -m venv .venv-wheel-smoke
+          . .venv-wheel-smoke/bin/activate
+          pip install --upgrade pip
+          pip install dist/*.whl --no-deps
+          python - <<'PY'
+          from pathlib import Path
+          import webly
+          from webly import chatbot
+
+          assert callable(webly.build_pipelines)
+          prompt_dir = Path(chatbot.__file__).resolve().parent / "prompts"
+          assert (prompt_dir / "context_builder_agent.txt").is_file()
+          assert (prompt_dir / "webly_chat_agent_system.txt").is_file()
+          print("wheel install smoke ok")
+          PY
