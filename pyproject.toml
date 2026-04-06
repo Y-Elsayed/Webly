@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "webly"
@@ -74,6 +74,9 @@ Changelog = "https://github.com/Y-Elsayed/webly/blob/main/CHANGELOG.md"
 [tool.setuptools.packages.find]
 where = ["."]
 exclude = ["tests*", "docs*", ".claude*"]
+
+[tool.setuptools.package-data]
+"webly.chatbot" = ["prompts/*.txt"]
 
 [tool.ruff]
 line-length = 120

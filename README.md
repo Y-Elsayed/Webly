@@ -50,6 +50,15 @@ Windows PowerShell alternative:
 Copy-Item .env.example .env
 ```
 
+## Package Install
+```bash
+pip install .
+pip install .[ui]
+pip install .[hf]
+```
+
+Use `.[ui]` for the Streamlit app and `.[hf]` for local Hugging Face embeddings.
+
 ## Run with Docker
 ```bash
 docker compose up --build -d
