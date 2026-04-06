@@ -67,6 +67,7 @@ Create/update a project in the UI, or use a config with keys like:
 - `start_url`, `allowed_domains`
 - `output_dir`, `index_dir`, `results_file`
 - `embedding_model`, `chat_model`, optional `summary_model`
+- Framework default: `embedding_model = "openai:text-embedding-3-small"`
 - `retrieval_mode` (`builder` or `classic`)
 - `builder_max_rounds` (follow-up retrieval rounds for builder mode)
 - `leave_last_k` (limit memory to the last K question/answer pairs; `0` keeps default behavior)
