@@ -1,7 +1,7 @@
 import hashlib
+import json
 import logging
 import os
-import pickle
 from typing import Dict, List, Optional
 
 import faiss
@@ -22,6 +22,9 @@ class FaissDatabase(VectorDatabase):
       - Cosine similarity via inner product + L2 normalization
     External usage/API unchanged.
     """
+
+    _METADATA_FILENAME = "metadata.json"
+    _LEGACY_METADATA_FILENAME = "metadata.meta"
 
     def __init__(self, index_path: str = None):
         self.index_path = index_path
@@ -315,14 +318,24 @@ class FaissDatabase(VectorDatabase):
                 "hnsw_efConstruction": self._hnsw_efConstruction,
             },
         }
-        with open(os.path.join(path, "metadata.meta"), "wb") as f:
-            pickle.dump(payload, f)
+        with open(os.path.join(path, self._METADATA_FILENAME), "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
 
     def load(self, path: str) -> None:
         self.index = faiss.read_index(os.path.join(path, "embeddings.index"))
+        metadata_path = os.path.join(path, self._METADATA_FILENAME)
+        legacy_metadata_path = os.path.join(path, self._LEGACY_METADATA_FILENAME)
 
-        with open(os.path.join(path, "metadata.meta"), "rb") as f:
-            payload = pickle.load(f)
+        if os.path.exists(metadata_path):
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        elif os.path.exists(legacy_metadata_path):
+            raise RuntimeError(
+                "Legacy metadata.meta detected. Rebuild the index with this Webly version to migrate "
+                "to the safe JSON metadata format."
+            )
+        else:
+            raise FileNotFoundError(f"Missing metadata file at {metadata_path}")
 
         # Backward compatibility: handle old format (list only)
         if isinstance(payload, dict) and "metadata" in payload:

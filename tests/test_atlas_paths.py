@@ -1,4 +1,4 @@
-from webcreeper.agents.atlas.atlas import Atlas
+from webly.webcreeper.agents.atlas.atlas import Atlas
 
 
 def test_allowed_and_blocked_paths():

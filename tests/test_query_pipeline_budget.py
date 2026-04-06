@@ -1,4 +1,4 @@
-from pipeline.query_pipeline import QueryPipeline
+from webly.pipeline.query_pipeline import QueryPipeline
 
 
 class _DummyChatbot:
