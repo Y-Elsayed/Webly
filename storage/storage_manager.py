@@ -8,7 +8,16 @@ class StorageManager:
         self.root = root_dir
         os.makedirs(self.root, exist_ok=True)
 
+    @staticmethod
+    def _sanitize_name(name: str, label: str = "name") -> str:
+        """Prevent path traversal by stripping any directory separators."""
+        clean = os.path.basename(name.replace("\\", "/"))
+        if not clean or clean.startswith("."):
+            raise ValueError(f"Invalid {label}: {name!r}")
+        return clean
+
     def get_paths(self, project: str):
+        project = self._sanitize_name(project, "project name")
         root = os.path.join(self.root, project)
         return {
             "root": root,
@@ -49,6 +58,7 @@ class StorageManager:
         return sorted([f[:-5] for f in os.listdir(p["chats"]) if f.endswith(".json")])
 
     def load_chat(self, project: str, chat_name: str):
+        chat_name = self._sanitize_name(chat_name, "chat name")
         fp = os.path.join(self.get_paths(project)["chats"], f"{chat_name}.json")
         if not os.path.exists(fp):
             return {"title": chat_name, "settings": {"score_threshold": 0.5}, "messages": []}
@@ -74,17 +84,21 @@ class StorageManager:
         return data
 
     def save_chat(self, project: str, chat_name: str, payload: dict):
+        chat_name = self._sanitize_name(chat_name, "chat name")
         fp = os.path.join(self.get_paths(project)["chats"], f"{chat_name}.json")
         os.makedirs(os.path.dirname(fp), exist_ok=True)
         with open(fp, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
 
     def delete_chat(self, project: str, chat_name: str):
+        chat_name = self._sanitize_name(chat_name, "chat name")
         fp = os.path.join(self.get_paths(project)["chats"], f"{chat_name}.json")
         if os.path.exists(fp):
             os.remove(fp)
 
     def rename_chat(self, project: str, old: str, new: str):
+        old = self._sanitize_name(old, "chat name")
+        new = self._sanitize_name(new, "chat name")
         p = self.get_paths(project)
         old_fp = os.path.join(p["chats"], f"{old}.json")
         new_fp = os.path.join(p["chats"], f"{new}.json")

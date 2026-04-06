@@ -88,7 +88,7 @@ def build_pipelines(config, api_key: str | None = None):
         db=db,
         summarizer=summarizer,
         use_summary=bool(summarizer),
-        debug=True,
+        debug=bool(config.get("debug", False)),
     )
 
     query_pipeline = None
@@ -102,7 +102,7 @@ def build_pipelines(config, api_key: str | None = None):
         agent = WeblyChatAgent(embedder, db, chatbot, system_prompt=configured_system_prompt)
         query_pipeline = QueryPipeline(
             chat_agent=agent,
-            debug=bool(config.get("query_debug", True)),
+            debug=bool(config.get("query_debug", False)),
             allow_best_effort=True,
             retrieval_mode=str(config.get("retrieval_mode", "builder")),
             builder_max_rounds=int(config.get("builder_max_rounds", 1)),

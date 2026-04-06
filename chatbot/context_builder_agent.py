@@ -1,7 +1,10 @@
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class ContextBuilderAgent:
@@ -21,7 +24,8 @@ class ContextBuilderAgent:
     def _load_prompt(self) -> str:
         try:
             return self.prompt_path.read_text(encoding="utf-8")
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Could not load context builder prompt from {self.prompt_path}: {e}")
             return "Context builder prompt unavailable."
 
     def _extract_json_payload(self, text: str) -> Optional[Dict]:
@@ -30,13 +34,14 @@ class ContextBuilderAgent:
         text = text.strip()
         try:
             return json.loads(text)
-        except Exception:
+        except json.JSONDecodeError:
             m = re.search(r"\{[\s\S]*\}", text)
             if not m:
                 return None
             try:
                 return json.loads(m.group(0))
-            except Exception:
+            except json.JSONDecodeError as e:
+                logger.debug(f"Could not parse JSON from LLM response: {e}")
                 return None
 
     def plan_initial_route(self, question: str, memory_context: str = "") -> Dict[str, object]:

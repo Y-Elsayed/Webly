@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import os
 import pickle
 from typing import Dict, List, Optional
@@ -7,6 +8,8 @@ import faiss
 import numpy as np
 
 from .vector_db import VectorDatabase
+
+logger = logging.getLogger(__name__)
 
 
 class FaissDatabase(VectorDatabase):
@@ -84,9 +87,9 @@ class FaissDatabase(VectorDatabase):
             if hasattr(self.index, "is_trained") and hasattr(self.index, "train"):
                 if not self.index.is_trained:
                     self.index.train(arr)
-        except Exception:
+        except Exception as e:
             # Non-trainable index types or already-trained: just ignore
-            pass
+            logger.debug(f"FAISS index training skipped: {e}")
 
     # ---------------- Core API ----------------
 

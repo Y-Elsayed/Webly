@@ -1,10 +1,14 @@
 # embedder/openai_embedder.py
+import logging
 import os
+import time
 from typing import List
 
-from openai import OpenAI
+from openai import APIConnectionError, APIStatusError, OpenAI, RateLimitError
 
 from embedder.base_embedder import Embedder
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIEmbedder(Embedder):
@@ -49,13 +53,32 @@ class OpenAIEmbedder(Embedder):
         except Exception:
             return max(1, len(text) // 4)
 
+    def _call_with_retry(self, fn, max_retries: int = 3, backoff: float = 1.0):
+        for attempt in range(max_retries + 1):
+            try:
+                return fn()
+            except RateLimitError as e:
+                if attempt == max_retries:
+                    raise
+                wait = backoff * (2 ** attempt)
+                logger.warning(f"OpenAI rate limit hit; retrying in {wait:.1f}s (attempt {attempt + 1}): {e}")
+                time.sleep(wait)
+            except (APIConnectionError, APIStatusError) as e:
+                if attempt == max_retries:
+                    raise
+                wait = backoff * (2 ** attempt)
+                logger.warning(f"OpenAI API error; retrying in {wait:.1f}s (attempt {attempt + 1}): {e}")
+                time.sleep(wait)
+
     def embed(self, text: str) -> List[float]:
         """
         Generate an embedding vector for a single text string.
         """
         if not text.strip():
             return []
-        resp = self.client.embeddings.create(model=self.model_name, input=text)
+        resp = self._call_with_retry(
+            lambda: self.client.embeddings.create(model=self.model_name, input=text)
+        )
         return resp.data[0].embedding
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
@@ -65,5 +88,7 @@ class OpenAIEmbedder(Embedder):
         texts = [t for t in texts if t.strip()]
         if not texts:
             return []
-        resp = self.client.embeddings.create(model=self.model_name, input=texts)
+        resp = self._call_with_retry(
+            lambda: self.client.embeddings.create(model=self.model_name, input=texts)
+        )
         return [item.embedding for item in resp.data]

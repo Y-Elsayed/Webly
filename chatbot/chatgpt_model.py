@@ -1,6 +1,11 @@
-from openai import OpenAI
+import logging
+import time
+
+from openai import APIConnectionError, APIStatusError, OpenAI, RateLimitError
 
 from chatbot.base_chatbot import Chatbot
+
+logger = logging.getLogger(__name__)
 
 
 class ChatGPTModel(Chatbot):
@@ -28,10 +33,24 @@ class ChatGPTModel(Chatbot):
             return 16_000
         return 16_000
 
-    def generate(self, prompt: str) -> str:
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-        )
-        return response.choices[0].message.content.strip()
+    def generate(self, prompt: str, max_retries: int = 3, backoff: float = 1.0) -> str:
+        for attempt in range(max_retries + 1):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.0,
+                )
+                return response.choices[0].message.content.strip()
+            except RateLimitError as e:
+                if attempt == max_retries:
+                    raise
+                wait = backoff * (2 ** attempt)
+                logger.warning(f"OpenAI rate limit hit; retrying in {wait:.1f}s (attempt {attempt + 1}): {e}")
+                time.sleep(wait)
+            except (APIConnectionError, APIStatusError) as e:
+                if attempt == max_retries:
+                    raise
+                wait = backoff * (2 ** attempt)
+                logger.warning(f"OpenAI API error; retrying in {wait:.1f}s (attempt {attempt + 1}): {e}")
+                time.sleep(wait)
