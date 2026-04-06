@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlunparse
 
 import requests
 
-from creeper_core.utils import configure_logging
+from .utils import configure_logging
 
 
 class BaseAgent(ABC):

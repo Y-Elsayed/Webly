@@ -3,7 +3,7 @@ import time
 
 from openai import APIConnectionError, APIStatusError, OpenAI, RateLimitError
 
-from chatbot.base_chatbot import Chatbot
+from .base_chatbot import Chatbot
 
 logger = logging.getLogger(__name__)
 

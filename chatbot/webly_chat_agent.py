@@ -4,7 +4,7 @@ import string
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from chatbot.base_chatbot import Chatbot
+from .base_chatbot import Chatbot
 
 logger = logging.getLogger(__name__)
 

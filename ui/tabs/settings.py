@@ -1,13 +1,12 @@
 import streamlit as st
-
-from chatbot.prompts.system_prompts import AnsweringMode
-from ui.helpers import (
+from webly.chatbot.prompts.system_prompts import AnsweringMode
+from webly.ui.helpers import (
     _domain_from_url,
     _ensure_prompt_editor_state,
     _mode_default_prompt_text,
 )
-from ui.project import rebuild_pipelines_for_project
-from ui.state import EMBEDDER_OPTIONS
+from webly.ui.project import rebuild_pipelines_for_project
+from webly.ui.state import EMBEDDER_OPTIONS
 
 
 def render_settings_tab(current_project: str, cfg: dict, manager):

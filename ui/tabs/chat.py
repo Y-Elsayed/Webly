@@ -1,7 +1,6 @@
 import streamlit as st
-
-from ui.helpers import _index_dir_ready
-from ui.project import (
+from webly.ui.helpers import _index_dir_ready
+from webly.ui.project import (
     _messages_for_memory,
     build_memory_context,
     ensure_chat_payload_shape,

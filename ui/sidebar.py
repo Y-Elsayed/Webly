@@ -1,20 +1,19 @@
 import os
 
 import streamlit as st
-
-from chatbot.prompts.system_prompts import AnsweringMode
-from ui.helpers import (
+from webly.chatbot.prompts.system_prompts import AnsweringMode
+from webly.ui.helpers import (
     _index_dir_ready,
     _mask_key,
     _results_file_ready,
     _validate_openai_key,
 )
-from ui.project import (
+from webly.ui.project import (
     ensure_project_pipelines,
     load_project_config,
     rebuild_pipelines_for_project,
 )
-from ui.state import EMBEDDER_OPTIONS, STORAGE_ROOT
+from webly.ui.state import EMBEDDER_OPTIONS, STORAGE_ROOT
 
 
 def render_sidebar(manager, projects: list) -> str | None:

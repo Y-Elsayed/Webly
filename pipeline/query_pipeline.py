@@ -5,7 +5,7 @@ from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from chatbot.context_builder_agent import ContextBuilderAgent
+from webly.chatbot.context_builder_agent import ContextBuilderAgent
 
 
 class QueryPipeline:

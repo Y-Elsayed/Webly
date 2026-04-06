@@ -1,8 +1,7 @@
 import string
 
 import tiktoken
-
-from chatbot.base_chatbot import Chatbot
+from webly.chatbot.base_chatbot import Chatbot
 
 
 class TextSummarizer:
