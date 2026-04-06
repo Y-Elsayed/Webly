@@ -25,39 +25,59 @@ User guide:
 - Run an agentic builder retrieval mode with concept coverage checks and follow-up retrieval rounds
 
 ## Architecture
-- `app.py`: Streamlit UI and project/chat management
-- `main.py`: pipeline factory (`build_pipelines`)
-- `chatbot/prompts/`: prompt files used by retrieval/chat agents
-- `crawl/` + `webcreeper/`: crawling
-- `processors/`: extraction, chunking, summarization
-- `embedder/`: embedding backends
-- `pipeline/`: ingest and query orchestration
-- `vector_index/`: FAISS wrapper
-- `storage/`: project/chat persistence
+- `webly/framework.py`: pipeline factory (`build_pipelines`)
+- `webly/chatbot/prompts/`: prompt files used by retrieval/chat agents
+- `webly/crawl/` + `webly/webcreeper/`: crawling
+- `webly/processors/`: extraction, chunking, summarization
+- `webly/embedder/`: embedding backends
+- `webly/pipeline/`: ingest and query orchestration
+- `webly/vector_index/`: FAISS wrapper
+- `webly/storage/`: project/chat persistence
 
-## Quick Start
+## Framework Quick Start
 Python `3.11.7` is recommended.
 
 ```bash
-pip install -r requirements.txt
+pip install .
 cp .env.example .env
 # set OPENAI_API_KEY in .env
-streamlit run app.py
 ```
 
-Windows PowerShell alternative:
+Optional extras:
+```bash
+pip install .[ui]
+pip install .[hf]
+pip install .[all]
+```
+
+Use:
+- `.[ui]` for the Streamlit app
+- `.[hf]` for local Hugging Face embeddings
+- `.[all]` for both
+
+Minimal framework usage:
+```python
+from webly import build_pipelines
+
+config = {
+    "start_url": "https://example.com/docs",
+    "output_dir": "./data/example",
+    "index_dir": "./data/example/index",
+}
+
+ingest_pipeline, query_pipeline = build_pipelines(config)
+```
+
+Windows PowerShell alternative for `.env`:
 ```powershell
 Copy-Item .env.example .env
 ```
 
-## Package Install
+## Streamlit App
 ```bash
-pip install .
 pip install .[ui]
-pip install .[hf]
+streamlit run app.py
 ```
-
-Use `.[ui]` for the Streamlit app and `.[hf]` for local Hugging Face embeddings.
 
 ## Run with Docker
 ```bash
