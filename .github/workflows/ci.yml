@@ -24,7 +24,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
-          pip install build
+          pip install build twine
 
       - name: Lint (ruff)
         run: ruff check .
@@ -43,6 +43,21 @@ jobs:
 
       - name: Build distribution artifacts
         run: python -m build
+
+      - name: Check distribution metadata
+        run: twine check dist/*
+
+      - name: Validate source install metadata
+        run: |
+          python -m venv .venv-source-install
+          . .venv-source-install/bin/activate
+          pip install --upgrade pip
+          pip install .[ui]
+          python - <<'PY'
+          import webly
+          assert callable(webly.build_pipelines)
+          print("source install with deps ok")
+          PY
 
       - name: Wheel install smoke test
         run: |

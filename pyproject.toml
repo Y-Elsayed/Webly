@@ -62,7 +62,15 @@ dev = [
 ]
 # Everything
 all = [
-    "webly[hf,ui]",
+    "sentence-transformers>=3.0.1",
+    "torch>=2.2.2",
+    "torchvision>=0.17.2",
+    "torchaudio>=2.2.2",
+    "transformers>=4.44.2",
+    "huggingface-hub>=0.23.4",
+    "tokenizers>=0.19.1",
+    "safetensors>=0.4.3",
+    "streamlit>=1.45.1",
 ]
 
 [project.urls]
