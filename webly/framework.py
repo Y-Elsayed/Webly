@@ -3,6 +3,10 @@ from typing import List, Optional
 
 from dotenv import load_dotenv
 
+from webly.config_validator import validate_pipeline_config
+from webly.observability.cost_tracker import CostTracker
+from webly.webcreeper.creeper_core.utils import configure_logging
+
 from webly.chatbot.chatgpt_model import ChatGPTModel
 from webly.chatbot.prompts.system_prompts import apply_mode_flags, get_system_prompt
 from webly.chatbot.webly_chat_agent import WeblyChatAgent
@@ -128,12 +132,14 @@ try:
         score_threshold: float
         debug: bool
         query_debug: bool
+        embedding_cache_dir: str
 
 except ImportError:
     PipelineConfig = dict  # type: ignore[misc,assignment]
 
 
 def build_pipelines(config: "PipelineConfig", api_key: Optional[str] = None):
+    configure_logging("webly")
     load_dotenv()
     api_key = api_key or os.getenv("OPENAI_API_KEY")
 
@@ -147,6 +153,10 @@ def build_pipelines(config: "PipelineConfig", api_key: Optional[str] = None):
         chat = "gpt-4o-mini"
         config["chat_model"] = chat
 
+    validate_pipeline_config(config)
+
+    tracker = CostTracker(output_dir=config.get("output_dir"))
+
     uses_openai_embedder = emb.startswith("openai:")
     uses_summary = bool(config.get("summary_model"))
 
@@ -155,7 +165,12 @@ def build_pipelines(config: "PipelineConfig", api_key: Optional[str] = None):
             raise RuntimeError("Missing OPENAI_API_KEY (required for OpenAI embeddings).")
         from webly.embedder.openai_embedder import OpenAIEmbedder
 
-        embedder = OpenAIEmbedder(model_name=emb.split(":", 1)[1], api_key=api_key)
+        embedder = OpenAIEmbedder(
+            model_name=emb.split(":", 1)[1],
+            api_key=api_key,
+            cache_dir=config.get("embedding_cache_dir"),
+            cost_tracker=tracker,
+        )
     else:
         from webly.embedder.hf_sentence_embedder import HFSentenceEmbedder
 
@@ -164,7 +179,7 @@ def build_pipelines(config: "PipelineConfig", api_key: Optional[str] = None):
     db = FaissDatabase()
     chatbot = None
     if api_key:
-        chatbot = ChatGPTModel(api_key=api_key, model=config.get("chat_model", "gpt-4o-mini"))
+        chatbot = ChatGPTModel(api_key=api_key, model=config.get("chat_model", "gpt-4o-mini"), cost_tracker=tracker)
 
     summarizer = None
     if uses_summary:
@@ -206,6 +221,7 @@ def build_pipelines(config: "PipelineConfig", api_key: Optional[str] = None):
         use_summary=bool(summarizer),
         debug=bool(config.get("debug", False)),
     )
+    ingest_pipeline.cost_tracker = tracker
 
     query_pipeline = None
     if chatbot is not None:
