@@ -117,22 +117,25 @@ class IngestPipeline:
           - ({ "url": ..., "html": ... })
         Return a dict the crawler can write directly, or None to skip.
         """
+        from datetime import datetime, timezone
+        _now = datetime.now(timezone.utc).isoformat()
+
         # dict style first
         if args and isinstance(args[0], dict):
             d = args[0]
             url = d.get("url")
             html = d.get("html")
-            return {"url": url, "html": html} if url and html else None
+            return {"url": url, "html": html, "crawled_at": _now} if url and html else None
 
         # tuple style
         if len(args) >= 2 and isinstance(args[0], str) and isinstance(args[1], str):
             url, html = args[0], args[1]
-            return {"url": url, "html": html} if url and html else None
+            return {"url": url, "html": html, "crawled_at": _now} if url and html else None
 
         # kwargs fallback
         url = kwargs.get("url")
         html = kwargs.get("html")
-        return {"url": url, "html": html} if url and html else None
+        return {"url": url, "html": html, "crawled_at": _now} if url and html else None
 
     def _safe_summarize(self, url: str, text: str) -> Optional[str]:
         """
@@ -321,6 +324,7 @@ class IngestPipeline:
                                     "page_url": url,
                                     "outgoing_links": outgoing_links,
                                     "incoming_links": incoming_links,
+                                    "crawled_at": record.get("crawled_at", ""),
                                 },
                             }
                             transformed_records.append(rec)
@@ -379,6 +383,12 @@ class IngestPipeline:
         mode = (mode or "both").lower()
         if mode not in ("crawl_only", "index_only", "both"):
             raise ValueError(f"Invalid mode: {mode}")
+
+        if force_crawl:
+            try:
+                os.remove(self._checkpoint_path())
+            except FileNotFoundError:
+                pass
 
         # ---------------- Crawl phase ----------------
         if mode in ("crawl_only", "both"):
@@ -439,6 +449,8 @@ class IngestPipeline:
             else:
                 self.logger.info(f"Using cached results at {resolved_before}")
 
+            self._write_checkpoint("crawl_done")
+
             if mode == "crawl_only":
                 self.logger.info("Crawl-only mode complete.")
                 return {
@@ -461,14 +473,53 @@ class IngestPipeline:
                         f"{resolved_for_index}. Run a crawl first or adjust Allowed Domains / seeds."
                     ),
                 }
-            records = self.transform()
-            self.load(records)
+            try:
+                records = self.transform()
+                self.load(records)
+                indexed_url_count = len({
+                    r.get("metadata", {}).get("page_url", "") for r in records
+                    if r.get("metadata")
+                })
+                self._write_checkpoint("load_done", {"indexed_url_count": indexed_url_count})
+            except Exception as e:
+                self._write_checkpoint("transform_or_load_failed", {"error": str(e)})
+                raise
             self.logger.info("Indexing phase complete.")
             return {
                 "crawled": (mode == "both"),
                 "indexed": True,
                 "index_path": self.index_path,
             }
+
+    # -------------------------------------------------------------------------
+    # Checkpoint helpers
+    # -------------------------------------------------------------------------
+
+    def _checkpoint_path(self) -> str:
+        return os.path.join(getattr(self.crawler, "output_dir", "."), "checkpoint.json")
+
+    def _read_checkpoint(self) -> dict:
+        try:
+            with open(self._checkpoint_path(), "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _write_checkpoint(self, stage: str, extra: dict | None = None) -> None:
+        from datetime import datetime, timezone
+        path = self._checkpoint_path()
+        payload = {
+            "stage": stage,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            **(extra or {}),
+        }
+        tmp = path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f)
+            os.replace(tmp, path)
+        except OSError as e:
+            self.logger.warning(f"Failed to write checkpoint to {path}: {e}")
 
     def _max_input_tokens(self) -> int:
         for attr in ("max_input_tokens", "max_tokens", "context_size", "max_seq_len"):
@@ -481,8 +532,8 @@ class IngestPipeline:
         if hasattr(self.embedder, "count_tokens"):
             try:
                 return int(self.embedder.count_tokens(text))
-            except Exception:
-                pass
+            except Exception as e:
+                self.logger.debug(f"embedder.count_tokens failed, using char-count heuristic: {e}")
         return max(1, len(text) // 4)
 
     def _hard_char_splits(self, text: str, max_tokens: int) -> list[str]:
