@@ -83,6 +83,7 @@ class EmbedAndStorePipeline:
                             "parent_id": parent_id,
                             "seg_index": seg_idx,
                             "seg_count": len(parts),
+                            "crawled_at": record.get("crawled_at", ""),
                         },
                     }
                     buffer.append(record_to_store)
@@ -117,8 +118,8 @@ class EmbedAndStorePipeline:
         if hasattr(self.embedder, "count_tokens"):
             try:
                 return int(self.embedder.count_tokens(text))
-            except Exception:
-                pass
+            except Exception as e:
+                self.logger.debug(f"embedder.count_tokens failed, using char-count heuristic: {e}")
         # Heuristic: ~4 chars per token
         return max(1, len(text) // 4)
 
