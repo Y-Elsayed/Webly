@@ -1,7 +1,10 @@
+import logging
 from abc import ABC, abstractmethod
 
 import trafilatura
 from bs4 import BeautifulSoup
+
+logger = logging.getLogger(__name__)
 
 
 class TextExtractor(ABC):
@@ -35,7 +38,8 @@ def _replace_cf_emails(html: str) -> str:
                 decoded = _decode_cf_email(data)
                 span.string = decoded  # replace placeholder with decoded email
                 span.attrs.pop("data-cfemail", None)
-            except Exception:
+            except Exception as e:
+                logger.debug(f"CF email decode failed for span, skipping: {e}")
                 continue
 
     return str(soup)

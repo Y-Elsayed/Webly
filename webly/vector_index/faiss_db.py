@@ -11,6 +11,8 @@ from .vector_db import VectorDatabase
 
 logger = logging.getLogger(__name__)
 
+INDEX_VERSION: int = 1
+
 
 class FaissDatabase(VectorDatabase):
     """
@@ -316,6 +318,7 @@ class FaissDatabase(VectorDatabase):
                 "hnsw_M": self._hnsw_M,
                 "hnsw_efSearch": self._hnsw_efSearch,
                 "hnsw_efConstruction": self._hnsw_efConstruction,
+                "index_version": INDEX_VERSION,
             },
         }
         with open(os.path.join(path, self._METADATA_FILENAME), "w", encoding="utf-8") as f:
@@ -341,6 +344,21 @@ class FaissDatabase(VectorDatabase):
         if isinstance(payload, dict) and "metadata" in payload:
             self.metadata = payload["metadata"]
             cfg = payload.get("config", {})
+
+            # Version check
+            stored_version = cfg.get("index_version", None)
+            if stored_version is None:
+                logger.warning(
+                    "Index has no 'index_version' field — built before versioning was introduced. "
+                    "Consider rebuilding the index. Loading will proceed but may behave unexpectedly."
+                )
+            elif stored_version != INDEX_VERSION:
+                raise RuntimeError(
+                    f"Index format version mismatch: this Webly version requires format v{INDEX_VERSION}, "
+                    f"but the loaded index was built with format v{stored_version}. "
+                    "Delete the index directory and run a full ingest to rebuild the index."
+                )
+
             self._index_type = cfg.get("index_type", "flat")
             self._ivf_nlist = cfg.get("ivf_nlist", self._ivf_nlist)
             self._pq_m = cfg.get("pq_m", self._pq_m)
@@ -358,5 +376,5 @@ class FaissDatabase(VectorDatabase):
         # Dim is embedded in the FAISS index already
         try:
             self.dim = self.index.d
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Could not read index dimension from index.d: {e}")
