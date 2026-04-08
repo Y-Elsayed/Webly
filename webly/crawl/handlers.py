@@ -1,3 +1,6 @@
+from datetime import datetime, timezone
+
+
 class HTMLSaver:
     """
     Default extractor/callback that saves the raw HTML for each crawled page.
@@ -16,4 +19,9 @@ class HTMLSaver:
         if not html.strip():
             return {}
 
-        return {"url": url, "html": html, "length": len(html)}
+        return {
+            "url": url,
+            "html": html,
+            "length": len(html),
+            "crawled_at": datetime.now(timezone.utc).isoformat(),
+        }

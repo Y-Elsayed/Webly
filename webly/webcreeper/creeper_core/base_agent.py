@@ -166,7 +166,8 @@ class BaseAgent(ABC):
             return True  # no robots.txt = allowed
         try:
             return rp.can_fetch(self.settings.get("user_agent", "DefaultCrawler"), url)
-        except Exception:
+        except Exception as e:
+            self.logger.debug(f"robots.txt can_fetch raised unexpectedly, defaulting to allowed: {e}")
             return True
 
     # -------------------- domain policy --------------------

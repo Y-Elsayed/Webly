@@ -1,7 +1,11 @@
+import logging
+
 from webly.webcreeper.agents.atlas.atlas import Atlas
 
 from .base_crawler import BaseCrawler
 from .handlers import HTMLSaver
+
+logger = logging.getLogger(__name__)
 
 
 class Crawler(BaseCrawler):
@@ -34,7 +38,8 @@ class Crawler(BaseCrawler):
     def get_disallowed_report(self):
         try:
             return self._atlas.get_disallowed_report() if hasattr(self, "_atlas") else {}
-        except Exception:
+        except Exception as e:
+            logger.debug(f"get_disallowed_report failed: {e}")
             return {}
 
     def crawl(self, on_page_crawled=None, settings_override=None, save_sitemap=True):

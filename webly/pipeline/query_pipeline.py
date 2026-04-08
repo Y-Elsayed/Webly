@@ -557,7 +557,8 @@ class QueryPipeline:
             netloc = (u.netloc or "").lower()
             path = (u.path or "/").rstrip("/") or "/"
             return urlunparse((scheme, netloc, path, "", urlencode(kept), ""))  # no fragment
-        except Exception:
+        except Exception as e:
+            self.logger.debug(f"URL normalization failed, returning input unchanged: {e}")
             return url or ""
 
     def _assemble_context(self, results: List[Dict[str, Any]], max_chars: int) -> str:
