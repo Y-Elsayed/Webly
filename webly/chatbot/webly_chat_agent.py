@@ -95,7 +95,8 @@ class WeblyChatAgent:
             if not answer:
                 answer = "I'm sorry, I couldn't find any relevant information to answer that question."
             return answer, supported
-        except Exception:
+        except Exception as e:
+            logger.debug(f"answer_with_support JSON parse failed, falling back to answer+probe: {e}")
             # Safe fallback: use existing answer path + answerability probe.
             answer = self.answer(question, context)
             supported = "Y" if self._judge_answerability(question, context) else "N"
@@ -151,6 +152,7 @@ class WeblyChatAgent:
         )
         try:
             verdict = (self.chatbot.generate(probe) or "").strip().upper()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"answerability probe LLM call failed, defaulting to False: {e}")
             return False
         return verdict.startswith("Y")

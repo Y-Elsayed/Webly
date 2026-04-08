@@ -1,6 +1,9 @@
+import logging
 import os
 
 import streamlit as st
+
+logger = logging.getLogger(__name__)
 
 from webly import build_pipelines
 from webly.ui.state import STORAGE_ROOT
@@ -59,7 +62,8 @@ def _messages_for_memory(payload: dict) -> list:
     settings = payload.get("settings", {}) or {}
     try:
         reset_at = int(settings.get("memory_reset_at", 0) or 0)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"memory_reset_at is not a valid int ({settings.get('memory_reset_at')!r}), defaulting to 0: {e}")
         reset_at = 0
     if reset_at <= 0:
         return msgs

@@ -9,13 +9,14 @@ logger = logging.getLogger(__name__)
 
 
 class ChatGPTModel(Chatbot):
-    def __init__(self, api_key: str, model: str = "gpt-3.5-turbo"):
+    def __init__(self, api_key: str, model: str = "gpt-3.5-turbo", cost_tracker=None):
         """ChatGPT model wrapper using the new OpenAI client."""
         self.client = OpenAI(api_key=api_key)
         self.model = model
         # Keep explicit attributes used by retrieval budget logic.
         self.model_name = model
         self.context_window_tokens = self._infer_context_window_tokens(model)
+        self._cost_tracker = cost_tracker
 
     @staticmethod
     def _infer_context_window_tokens(model: str) -> int:
@@ -41,6 +42,12 @@ class ChatGPTModel(Chatbot):
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.0,
                 )
+                if self._cost_tracker is not None and response.usage is not None:
+                    self._cost_tracker.record_chat(
+                        self.model,
+                        response.usage.prompt_tokens,
+                        response.usage.completion_tokens,
+                    )
                 return response.choices[0].message.content.strip()
             except RateLimitError as e:
                 if attempt == max_retries:

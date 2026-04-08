@@ -1,30 +1,57 @@
+import json
+import logging
 import os
-from logging import INFO, FileHandler, Formatter, StreamHandler, getLogger
+from logging import FileHandler, Formatter, StreamHandler, getLogger
 
 
-def configure_logging(module_name: str, log_file: str = "./log/crawler.log"):
+class JsonFormatter(logging.Formatter):
+    """Formats log records as single-line JSON objects."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict = {
+            "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exc_info"] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False)
+
+
+def configure_logging(
+    module_name: str,
+    log_file: str = "./log/crawler.log",
+    json_output: bool = False,
+    level: int = logging.INFO,
+):
     """
     Configures and returns a logger that writes to both console and a log file.
+
+    Set json_output=True (or env var WEBLY_LOG_JSON=1) to emit JSON lines on
+    the console stream. The file handler always uses plain text.
     """
-    # Check if the log directory exists and create it if it doesn't
     log_dir = os.path.dirname(log_file)
-    if not os.path.exists(log_dir):
+    if log_dir and not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
     logger = getLogger(module_name)
     if not logger.handlers:
-        # StreamHandler for console output
-        stream_handler = StreamHandler()
-        stream_formatter = Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        stream_handler.setFormatter(stream_formatter)
+        use_json = json_output or os.environ.get("WEBLY_LOG_JSON", "").lower() == "1"
 
-        # FileHandler for file output
+        stream_handler = StreamHandler()
+        stream_handler.setFormatter(
+            JsonFormatter() if use_json
+            else Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        )
+
         file_handler = FileHandler(log_file)
-        file_formatter = Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        file_handler.setFormatter(file_formatter)
+        file_handler.setFormatter(
+            Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        )
 
         logger.addHandler(stream_handler)
         logger.addHandler(file_handler)
 
-    logger.setLevel(INFO)
+    logger.setLevel(level)
     return logger
