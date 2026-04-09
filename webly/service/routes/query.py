@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 
 from webly.query_result import QueryResult
 from webly.service.dependencies import get_runtime_service
@@ -29,15 +29,10 @@ def query_project(
     request: QueryRequest,
     runtime_service: RuntimeService = Depends(get_runtime_service),
 ) -> QueryResponse:
-    try:
-        result = runtime_service.query_project(
-            project,
-            question=request.question,
-            retry_on_empty=request.retry_on_empty,
-            memory_context=request.memory_context,
-        )
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+    result = runtime_service.query_project(
+        project,
+        question=request.question,
+        retry_on_empty=request.retry_on_empty,
+        memory_context=request.memory_context,
+    )
     return _query_response(result)

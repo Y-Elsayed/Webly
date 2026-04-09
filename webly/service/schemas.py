@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ProjectConfigCreate(BaseModel):
@@ -66,6 +66,19 @@ class ProjectConfigPatch(BaseModel):
 
 
 class ProjectCreateRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "name": "Docs",
+                "config": {
+                    "start_url": "https://example.com/docs",
+                    "allowed_domains": ["example.com"],
+                    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+                },
+            }
+        }
+    )
+
     name: str
     config: ProjectConfigCreate
 
@@ -95,7 +108,11 @@ class RuntimeCapabilitiesResponse(BaseModel):
     has_openai_api_key: bool
     uses_openai_embeddings: bool
     uses_summary_model: bool
+    requires_openai_for_ingest: bool
+    requires_openai_for_query: bool
+    ingest_pipeline_available: bool
     query_pipeline_available: bool
+    blockers: list[str] = Field(default_factory=list)
 
 
 class ProjectStatusResponse(BaseModel):
@@ -110,6 +127,16 @@ class ProjectStatusResponse(BaseModel):
 
 
 class QueryRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "question": "How does authentication work?",
+                "memory_context": "",
+                "retry_on_empty": False,
+            }
+        }
+    )
+
     question: str
     memory_context: str = ""
     retry_on_empty: bool = False
@@ -122,6 +149,23 @@ class SourceRefResponse(BaseModel):
 
 
 class QueryResponse(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "answer": "Authentication uses API tokens.",
+                "supported": True,
+                "sources": [
+                    {
+                        "chunk_id": "chunk-1",
+                        "url": "https://example.com/docs/auth",
+                        "section": "Authentication",
+                    }
+                ],
+                "trace": {},
+            }
+        }
+    )
+
     answer: str
     supported: bool
     sources: list[SourceRefResponse] = Field(default_factory=list)
@@ -165,4 +209,8 @@ class ChatListResponse(BaseModel):
 
 
 class ErrorResponse(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={"example": {"detail": "Project not found: Docs"}}
+    )
+
     detail: str
