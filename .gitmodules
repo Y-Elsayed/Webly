@@ -1,0 +1,3 @@
+[submodule "webcreeper"]
+	path = webcreeper
+	url = https://github.com/Y-Elsayed/WebCreeper.git
