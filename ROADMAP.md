@@ -14,6 +14,7 @@ This roadmap is organized by Webly components and split into:
 - Dockerized app run path
 - Retrieval mode controls in UI (`builder` / `classic`)
 - Memory window control (`leave_last_k`) and builder rounds setting in UI
+- UI modules split under `webly/ui/` with runtime-backed project rebuild flow
 
 ### Next
 - Improve overall UI quality (layout consistency, clarity of actions/states, better empty/error states)
@@ -31,6 +32,7 @@ This roadmap is organized by Webly components and split into:
 ## API Service Layer (non-UI usage)
 ### Done
 - Core pipelines are importable and callable from Python modules
+- Typed runtime/config bootstrap (`ProjectConfig`, `ProjectRuntime`, `build_runtime`)
 
 ### Next
 - Add a lightweight FastAPI service exposing core operations:
@@ -89,6 +91,7 @@ This roadmap is organized by Webly components and split into:
 - Best-effort responses with concept-oriented "Read more" links
 
 ### Next
+- Split retrieval into typed query results plus explicit sources/trace for service-layer reuse
 - Improve query understanding so retrieval can better parse user intent and reformulate searches
 - Add stronger reasoning-aware retrieval steps for ambiguous or multi-part questions
 - Improve route-decision quality so standalone questions are less likely to be treated as follow-ups
