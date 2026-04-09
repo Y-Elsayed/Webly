@@ -79,6 +79,18 @@ This roadmap is organized by Webly components and split into:
 - Stronger chunk metadata consistency and docs
 - Expand ingest tests for edge conditions
 - Continue decomposing `IngestPipeline` into smaller collaborators
+- Extract crawl output and `results.jsonl` loading into a dedicated results reader
+- Extract `graph.json` loading and graph metadata enrichment into dedicated graph helpers
+- Extract checkpoint read/write and resume decisions into a dedicated checkpoint store
+- Extract page/chunk/embedding preparation into a dedicated ingest preparation helper
+- Keep `IngestPipeline.run()` as the compatibility orchestrator while moving internal responsibilities out
+
+Planned ingest decomposition order:
+1. Results reader and graph enricher
+2. `IngestPipeline` rewiring to use those helpers
+3. Checkpoint store extraction
+4. Embedding preparation extraction
+5. Final `IngestPipeline` cleanup as a thin coordinator
 
 ### Later
 - Pluggable extractors (additional parser backends)
@@ -96,6 +108,7 @@ This roadmap is organized by Webly components and split into:
 - Best-effort responses with concept-oriented "Read more" links
 - Typed query results plus explicit sources/trace for reuse outside Streamlit
 - Configured `score_threshold` now applies to vector retrieval
+- Query evaluation harness with golden query cases covering supported, best-effort, and hard-fallback paths
 
 ### Next
 - Improve query understanding so retrieval can better parse user intent and reformulate searches
@@ -103,7 +116,7 @@ This roadmap is organized by Webly components and split into:
 - Improve route-decision quality so standalone questions are less likely to be treated as follow-ups
 - Improve "Read more" precision to prioritize links most relevant to the current question only
 - Source citation quality improvements
-- Query evaluation harness (gold questions + metrics)
+- Extend the query evaluation harness with metrics-oriented cases and broader retrieval regression coverage
 - Retrieval cache for repeated queries
 - Decompose the current `QueryPipeline` god class into smaller retrieval/context components
 
