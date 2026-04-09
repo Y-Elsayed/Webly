@@ -1,11 +1,10 @@
 ﻿import logging
-import math
-import re
-from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from webly.chatbot.context_builder_agent import ContextBuilderAgent
+from webly.pipeline.query_context import QueryContextTools
+from webly.pipeline.query_retriever import QueryRetriever
+from webly.pipeline.query_response_composer import QueryResponseComposer
 from webly.query_result import QueryResult, SourceRef
 
 
@@ -67,16 +66,20 @@ class QueryPipeline:
         self.context_builder = ContextBuilderAgent(planner_llm=getattr(self.chat_agent, "chatbot", None))
         self.logger = logging.getLogger(self.__class__.__name__)
 
-        # Hybrid retrieval (BM25) cache
-        self._bm25_ready = False
-        self._bm25_docs = []
-        self._bm25_doc_ids = []
-        self._bm25 = None
-        self._bm25_avgdl = 0.0
-        self._bm25_df = defaultdict(int)
-        self._bm25_idf = {}
-        self._bm25_k1 = 1.5
-        self._bm25_b = 0.75
+        self.retriever = QueryRetriever(
+            chat_agent=self.chat_agent,
+            logger=self.logger,
+            enable_hybrid=self.enable_hybrid,
+            anchor_boost=self.anchor_boost,
+            section_boost=self.section_boost,
+            score_threshold=self.score_threshold,
+        )
+        self.context_tools = QueryContextTools()
+        self.response_composer = QueryResponseComposer(
+            chat_agent=self.chat_agent,
+            context_tools=self.context_tools,
+            max_context_chars=self.max_context_chars,
+        )
         self._last_used_sources: List[Dict[str, str]] = []
         self._last_supported: bool = False
         self._last_trace: Dict[str, Any] = {}
@@ -468,111 +471,23 @@ class QueryPipeline:
         )
 
     def _current_sources(self) -> List[SourceRef]:
-        sources: List[SourceRef] = []
-        seen: set[tuple[str, str]] = set()
-        for item in self._last_used_sources:
-            url = str(item.get("url") or "").strip()
-            chunk_id = str(item.get("chunk_id") or "").strip()
-            if not url or not chunk_id:
-                continue
-            key = (chunk_id, url)
-            if key in seen:
-                continue
-            seen.add(key)
-            sources.append(
-                SourceRef(
-                    chunk_id=chunk_id,
-                    url=url,
-                    section=str(item.get("section") or ""),
-                )
-            )
-        return sources
+        return self.context_tools.current_sources(self._last_used_sources)
 
     def _search(self, query: Optional[Union[str, List[str]]], k: int, tag: str) -> List[Dict[str, Any]]:
-        if not query:
-            return []
-        queries = [query] if isinstance(query, str) else list(query)
-        all_results: List[Dict[str, Any]] = []
-        for q in queries:
-            # Vector search
-            q_emb = self.chat_agent.embedder.embed(q)
-            results = self.chat_agent.vector_db.search(q_emb, top_k=k) or []
-            if self.score_threshold > 0.0:
-                results = [
-                    record
-                    for record in results
-                    if float(record.get("score") or 0.0) >= self.score_threshold
-                ]
-            for i, r in enumerate(results):
-                r.setdefault("_meta_rank", i)
-                r.setdefault("_origin", tag)
-                r.setdefault("_score_vec", float(r.get("score") or 0.0))
-            all_results.extend(results)
-
-            # Hybrid BM25 search (optional)
-            if self.enable_hybrid:
-                bm25_hits = self._bm25_search(q, top_k=max(8, k))
-                for i, r in enumerate(bm25_hits):
-                    r.setdefault("_meta_rank", i)
-                    r.setdefault("_origin", f"{tag}-bm25")
-                    r.setdefault("_score_bm25", float(r.get("_score_bm25") or 0.0))
-                all_results.extend(bm25_hits)
-        return all_results
+        return self.retriever.search(query, k, tag)
 
     def _collect_hints_for_rewrite(self, results: List[Dict[str, Any]]) -> List[str]:
-        hints: List[str] = []
-        for r in results[:8]:
-            if r.get("hierarchy"):
-                hints.append(" > ".join(r["hierarchy"]))
-            for inc in r.get("metadata", {}).get("incoming_links") or []:
-                if inc.get("anchor_text"):
-                    hints.append(inc["anchor_text"])
-        return [h for h in hints if h]
+        return self.retriever.collect_hints_for_rewrite(results)
 
     def _expand_via_graph(self, question: str, seeds: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        expansions: List[Dict[str, Any]] = []
-        seen_queries = set()
-
-        for r in seeds[:12]:
-            inc_links = (r.get("metadata", {}) or {}).get("incoming_links") or []
-            for inc in inc_links[:5]:
-                anchor = (inc.get("anchor_text") or "").strip()
-                if not anchor:
-                    continue
-                q = f"{anchor} {question}".strip()
-                if q in seen_queries:
-                    continue
-                seen_queries.add(q)
-                res = self._search(q, k=3, tag="graph-anchor")
-                for x in res:
-                    x.setdefault("_boost_reason", "anchor")
-                expansions.extend(res)
-        return expansions
+        return self.retriever.expand_via_graph(question, seeds)
 
     def _expand_via_section(self, question: str, seeds: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        expansions: List[Dict[str, Any]] = []
-        seen_queries = set()
-
-        for r in seeds[:10]:
-            top_heading = None
-            if isinstance(r.get("hierarchy"), list) and r["hierarchy"]:
-                top_heading = r["hierarchy"][0]
-            if not top_heading:
-                continue
-
-            q = f"{question} {top_heading}"
-            if q in seen_queries:
-                continue
-            seen_queries.add(q)
-
-            res = self._search(q, k=3, tag="section")
-            for x in res:
-                x.setdefault("_boost_reason", "section")
-            expansions.extend(res)
-        return expansions
+        return self.retriever.expand_via_section(question, seeds)
 
     def _combine_and_rerank(self, *result_groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        # Allow both call styles: _combine_and_rerank(list) or _combine_and_rerank(list1, list2, ...)
+        return self.retriever.combine_and_rerank(*result_groups)
+
         groups: List[List[Dict[str, Any]]] = []
         if len(result_groups) == 1 and isinstance(result_groups[0], list):
             # single list possibly passed in
@@ -647,221 +562,34 @@ class QueryPipeline:
 
     # ---------------- Hybrid retrieval (BM25) ----------------
     def _tokenize(self, text: str) -> List[str]:
-        return re.findall(r"[A-Za-z0-9_]{2,}", (text or "").lower())
+        return self.retriever._tokenize(text)
 
     def _ensure_bm25(self):
-        if self._bm25_ready:
-            return
-        docs = []
-        doc_ids = []
-        for rec in self.chat_agent.vector_db.metadata or []:
-            text = rec.get("text") or rec.get("summary") or ""
-            if not text:
-                continue
-            tokens = self._tokenize(text)
-            if not tokens:
-                continue
-            docs.append(tokens)
-            doc_ids.append(rec)
-
-        self._bm25_docs = docs
-        self._bm25_doc_ids = doc_ids
-        if not docs:
-            self._bm25_ready = True
-            return
-
-        df = defaultdict(int)
-        total_len = 0
-        for doc in docs:
-            total_len += len(doc)
-            for t in set(doc):
-                df[t] += 1
-        self._bm25_df = df
-        self._bm25_avgdl = total_len / max(len(docs), 1)
-        n_docs = len(docs)
-        self._bm25_idf = {t: math.log(1 + (n_docs - f + 0.5) / (f + 0.5)) for t, f in df.items()}
-        self._bm25_ready = True
+        self.retriever._ensure_bm25()
+        return
 
     def _bm25_search(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
-        self._ensure_bm25()
-        if not self._bm25_docs:
-            return []
-
-        q_terms = self._tokenize(query)
-        if not q_terms:
-            return []
-
-        scores = []
-        for i, doc in enumerate(self._bm25_docs):
-            doc_len = len(doc)
-            tf = defaultdict(int)
-            for t in doc:
-                tf[t] += 1
-            score = 0.0
-            for t in q_terms:
-                if t not in tf:
-                    continue
-                idf = self._bm25_idf.get(t, 0.0)
-                denom = tf[t] + self._bm25_k1 * (1 - self._bm25_b + self._bm25_b * (doc_len / self._bm25_avgdl))
-                score += idf * (tf[t] * (self._bm25_k1 + 1) / denom)
-            scores.append((score, i))
-
-        scores.sort(key=lambda x: x[0], reverse=True)
-        hits = []
-        for score, idx in scores[:top_k]:
-            if score <= 0:
-                continue
-            rec = self._bm25_doc_ids[idx].copy()
-            rec["_score_bm25"] = float(score)
-            hits.append(rec)
-        return hits
+        return self.retriever._bm25_search(query, top_k=top_k)
 
     def _normalize_for_dedupe(self, url: str) -> str:
-        try:
-            u = urlparse(url)
-            drop = {
-                "utm_source",
-                "utm_medium",
-                "utm_campaign",
-                "utm_term",
-                "utm_content",
-                "fbclid",
-                "gclid",
-                "ref",
-                "ref_src",
-                "ref_url",
-                "page",
-            }
-            kept = [(k, v) for k, v in parse_qsl(u.query, keep_blank_values=True) if k.lower() not in drop]
-            kept.sort()
-            scheme = (u.scheme or "https").lower()
-            netloc = (u.netloc or "").lower()
-            path = (u.path or "/").rstrip("/") or "/"
-            return urlunparse((scheme, netloc, path, "", urlencode(kept), ""))  # no fragment
-        except Exception as e:
-            self.logger.debug(f"URL normalization failed, returning input unchanged: {e}")
-            return url or ""
+        return self.retriever._normalize_for_dedupe(url)
 
     def _assemble_context(self, results: List[Dict[str, Any]], max_chars: int) -> str:
-        section_groups: Dict[str, List[str]] = defaultdict(list)
-        seen_ids = set()
-        total = 0
-        used_sources: List[Dict[str, str]] = []
-
-        for r in results:
-            uid = r.get("id") or f"{r.get('url','')}#chunk_{r.get('chunk_index',-1)}"
-            if uid in seen_ids:
-                continue
-            seen_ids.add(uid)
-
-            text = (r.get("text") or "").strip()
-            if not text:
-                continue
-
-            url = r.get("url") or r.get("source", "N/A")
-            subheadings = " > ".join(r.get("hierarchy", [])) if r.get("hierarchy") else ""
-            prefix = f"[{subheadings}]\n" if subheadings else ""
-            chunk_text = f"{prefix}{text}\n\n(Source: {url})"
-
-            if total + len(chunk_text) > max_chars:
-                remaining = max(0, max_chars - total)
-                preview = chunk_text[:remaining]
-                if preview:
-                    top = (r.get("hierarchy") or ["General"])[0]
-                    section_groups[top].append(preview)
-                    total += len(preview)
-                    used_sources.append(
-                        {
-                            "chunk_id": str(uid),
-                            "url": str(url),
-                            "section": str(top),
-                        }
-                    )
-                break
-
-            top_level = (r.get("hierarchy") or ["General"])[0]
-            section_groups[top_level].append(chunk_text)
-            total += len(chunk_text)
-            used_sources.append(
-                {
-                    "chunk_id": str(uid),
-                    "url": str(url),
-                    "section": str(top_level),
-                }
-            )
-
-            if total >= max_chars:
-                break
-
-        blocks = []
-        for section, chunks in section_groups.items():
-            full = "\n\n".join(chunks).strip()
-            if full:
-                blocks.append(full)
-
+        context, used_sources = self.context_tools.assemble_context(results, max_chars=max_chars)
         self._last_used_sources = used_sources
-        return "\n\n---\n\n".join(blocks).strip()
+        return context
 
     def _compute_budget_chars(self, question: str) -> int:
-        """
-        Adaptive context size based on model context window when available.
-        We reserve room for instructions, user question, and model output.
-        """
-        base = max(self.max_context_chars, 8000)  # never go below 8k chars
-        chatbot = getattr(self.chat_agent, "chatbot", None)
-        context_window = getattr(chatbot, "context_window_tokens", None)
-
-        # Preferred path: explicit model context window from the chatbot wrapper.
-        if isinstance(context_window, int) and context_window > 0:
-            # Reserve at least 2k tokens, or 15% of window, for system/user/answer overhead.
-            reserve_tokens = max(2000, int(context_window * 0.15))
-            usable_tokens = max(2000, context_window - reserve_tokens)
-            # Rough conversion: 1 token ~ 4 chars. Cap to avoid extreme prompt sizes.
-            return max(base, min(int(usable_tokens * 4), 180000))
-
-        model_name = (getattr(chatbot, "model_name", None) or getattr(chatbot, "model", "")).lower()
-        # Fallback heuristic for wrappers without explicit context metadata.
-        if "gpt-4o" in model_name or "4o" in model_name or "gpt-4.1" in model_name:
-            return min(int(base * 5), 100000)
-        return base
+        _ = question
+        return self.context_tools.compute_budget_chars(
+            self.chat_agent,
+            max_context_chars=self.max_context_chars,
+        )
 
     def _fallback_payload(self, results: List[Dict[str, Any]], question: str) -> Tuple[str, bool]:
-        """
-        Natural fallback when we can't find enough info. Provide a few helpful links if any
-        retrieved items exist; otherwise a concise apology.
-        """
-        if not results:
-            self._last_used_sources = []
-            return "I couldn't find anything on this site related to your question.", False
-
-        context = self._assemble_context(results[: min(8, len(results))], max_chars=min(self.max_context_chars, 8000))
-        _, supported = self.chat_agent.answer_with_support(question, context)
-        if supported != "Y":
-            return "I couldn't find enough information on this site to answer that directly.", False
-
-        # Pick up to 3 distinct useful URLs with optional section labels
-        links: List[str] = []
-        seen = set()
-        for r in results:
-            url = r.get("url") or r.get("source")
-            if not url or url in seen:
-                continue
-            seen.add(url)
-            section = " > ".join(r.get("hierarchy", [])[:2]) if r.get("hierarchy") else None
-            if section:
-                links.append(f"- {section}: {url}")
-            else:
-                links.append(f"- {url}")
-            if len(links) >= 3:
-                break
-
-        if not links:
-            return "I couldn't find enough relevant information here to answer that.", False
-
-        return (
-            "I couldn't find enough information on this site to answer that directly. "
-            "These pages may help:\n" + "\n".join(links)
-        ), False
+        answer, supported, used_sources = self.response_composer.fallback_payload(results, question)
+        self._last_used_sources = used_sources
+        return answer, supported
 
     def _fallback_message(self, results: List[Dict[str, Any]], question: str) -> str:
         return self._fallback_payload(results, question)[0]
@@ -874,36 +602,13 @@ class QueryPipeline:
         coverage: Dict[str, List[str]],
         results: List[Dict[str, Any]],
     ) -> Tuple[str, bool]:
-        """
-        Best-effort response when context is partially relevant but not fully answerable.
-        Includes explicit uncertainty + concept-oriented links for follow-up reading.
-        """
-        missing = coverage.get("missing") or []
-        used_urls = self._read_more_urls_from_used_sources(limit=3)
-
-        if missing:
-            guided_question = (
-                f"{question_for_answer}\n\n"
-                "Instruction: Use only the provided website context.\n"
-                "Never add external knowledge.\n"
-                "If information is missing, explicitly say it is not covered in the documentation.\n"
-                f"Missing concepts detected: {', '.join(missing)}"
-            )
-            base_answer, supported = self.chat_agent.answer_with_support(guided_question, context)
-            base_answer = (base_answer or "").strip()
-        else:
-            base_answer, supported = self.chat_agent.answer_with_support(question_for_answer, context)
-            base_answer = (base_answer or "").strip()
-
-        if not used_urls:
-            return base_answer, str(supported).upper() == "Y"
-        if str(supported).upper() != "Y":
-            return base_answer, False
-
-        lines = ["Read more:"]
-        for u in used_urls:
-            lines.append(f"- {u}")
-        return f"{base_answer}\n\n" + "\n".join(lines), True
+        _ = concepts, results
+        return self.response_composer.best_effort_payload(
+            question_for_answer=question_for_answer,
+            context=context,
+            coverage=coverage,
+            used_sources=self._last_used_sources,
+        )
 
     def _best_effort_with_links(
         self,
@@ -922,66 +627,19 @@ class QueryPipeline:
         )[0]
 
     def _read_more_urls_from_used_sources(self, limit: int = 3) -> List[str]:
-        links = []
-        seen = set()
-        for src in self._last_used_sources:
-            url = str(src.get("url") or "").strip()
-            if not url or url in seen:
-                continue
-            seen.add(url)
-            links.append(url)
-            if len(links) >= limit:
-                break
-        return links
+        return self.context_tools.read_more_urls_from_used_sources(self._last_used_sources, limit=limit)
 
     def _helpful_links_by_concept(
         self, concepts: List[str], results: List[Dict[str, Any]], max_links_per_concept: int = 2
     ) -> Dict[str, List[str]]:
-        out: Dict[str, List[str]] = {}
-        if not concepts:
-            return out
-
-        for concept in concepts[:4]:
-            needle = (concept or "").strip().lower()
-            if not needle:
-                continue
-
-            links = []
-            seen = set()
-            for r in results[:20]:
-                url = r.get("url") or r.get("source")
-                if not url or url in seen:
-                    continue
-                text = (r.get("text") or "").lower()
-                hierarchy = " ".join(r.get("hierarchy") or []).lower()
-                if needle in text or needle in hierarchy or needle in url.lower():
-                    seen.add(url)
-                    links.append(url)
-                if len(links) >= max_links_per_concept:
-                    break
-            if links:
-                out[concept] = links
-        return out
+        return self.context_tools.helpful_links_by_concept(
+            concepts,
+            results,
+            max_links_per_concept=max_links_per_concept,
+        )
 
     def _top_distinct_urls(self, results: List[Dict[str, Any]], limit: int = 3) -> List[str]:
-        links = []
-        seen = set()
-        for r in results:
-            url = r.get("url") or r.get("source")
-            if not url or url in seen:
-                continue
-            seen.add(url)
-            links.append(url)
-            if len(links) >= limit:
-                break
-        return links
+        return self.context_tools.top_distinct_urls(results, limit=limit)
 
     def _extract_used_urls_from_context(self, context: str) -> List[str]:
-        links = []
-        seen = set()
-        for url in re.findall(r"\(Source:\s*(https?://[^\s\)]+)\)", context or ""):
-            if url in seen:
-                continue
-            seen.add(url)
-            links.append(url)
-        return links
+        return self.context_tools.extract_used_urls_from_context(context)
