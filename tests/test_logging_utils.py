@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from webly.webcreeper.creeper_core.utils import JsonFormatter, configure_logging
+from webly._webcreeper import JsonFormatter, configure_logging
 
 
 def _make_record(msg: str, level: int = logging.INFO, exc_info=None) -> logging.LogRecord:

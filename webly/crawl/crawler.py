@@ -1,6 +1,6 @@
 import logging
 
-from webly.webcreeper.agents.atlas.atlas import Atlas
+from webly._webcreeper import Atlas
 
 from .base_crawler import BaseCrawler
 from .handlers import HTMLSaver

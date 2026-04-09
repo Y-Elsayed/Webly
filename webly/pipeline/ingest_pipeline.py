@@ -8,6 +8,7 @@ from webly.crawl.crawler import Crawler
 from webly.embedder.base_embedder import Embedder
 from webly.pipeline.embedding_text import chunk_text_for_embedding, count_tokens, hard_char_splits, max_input_tokens
 from webly.vector_index.vector_db import VectorDatabase
+from webly._webcreeper import configure_logging
 
 try:
     from webly.processors.text_summarizer import TextSummarizer
@@ -16,7 +17,6 @@ except ImportError:
 from webly.processors.page_processor import SemanticPageProcessor
 from webly.processors.text_chunkers import DefaultChunker
 from webly.processors.text_extractors import DefaultTextExtractor
-from webly.webcreeper.creeper_core.utils import configure_logging
 
 
 class IngestPipeline:

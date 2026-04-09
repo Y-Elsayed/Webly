@@ -1,4 +1,4 @@
-from webly.webcreeper.creeper_core.base_agent import BaseAgent
+from webcreeper.creeper_core.base_agent import BaseAgent
 
 
 class DummyAgent(BaseAgent):

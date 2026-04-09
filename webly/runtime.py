@@ -15,8 +15,8 @@ from webly.pipeline.ingest_pipeline import IngestPipeline
 from webly.pipeline.query_pipeline import QueryPipeline
 from webly.project_config import ProjectConfig
 from webly.query_result import QueryResult
+from webly._webcreeper import configure_logging
 from webly.vector_index.faiss_db import FaissDatabase
-from webly.webcreeper.creeper_core.utils import configure_logging
 
 
 @dataclass(slots=True)

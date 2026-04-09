@@ -30,7 +30,7 @@ User guide:
 - `webly/runtime.py`: runtime bootstrap and index/query lifecycle (`build_runtime`)
 - `webly/framework.py`: compatibility factory (`build_pipelines`)
 - `webly/chatbot/prompts/`: prompt files used by retrieval/chat agents
-- `webly/crawl/` + `webly/webcreeper/`: crawling runtime
+- `webly/crawl/` + `webcreeper/`: crawling runtime (`webcreeper/` is the sibling source-of-truth repo/submodule)
 - `webly/processors/`: extraction, chunking, summarization
 - `webly/embedder/`: embedding backends
 - `webly/pipeline/`: ingest and query orchestration
@@ -45,6 +45,13 @@ pip install .
 cp .env.example .env
 # set OPENAI_API_KEY in .env
 ```
+
+Repository bootstrap:
+```bash
+git submodule update --init --recursive
+```
+
+If you are running Webly outside this repo layout, install `webcreeper` separately in the environment.
 
 Optional extras:
 ```bash
