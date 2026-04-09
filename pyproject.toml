@@ -81,7 +81,7 @@ Changelog = "https://github.com/Y-Elsayed/webly/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["."]
-exclude = ["tests*", "docs*", ".claude*"]
+exclude = ["tests*", "docs*", ".claude*", "webcreeper*"]
 
 [tool.setuptools.package-data]
 "webly.chatbot" = ["prompts/*.txt"]

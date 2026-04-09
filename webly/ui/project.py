@@ -1,39 +1,21 @@
 import logging
-import os
 
 import streamlit as st
 
-logger = logging.getLogger(__name__)
+from webly.project_config import ProjectConfig
+from webly.runtime import build_runtime
+from webly.storage.chat_repository import FileChatRepository
 
-from webly import build_pipelines
-from webly.ui.state import STORAGE_ROOT
+logger = logging.getLogger(__name__)
 
 
 def load_project_config(project: str, manager) -> dict:
-    cfg = manager.get_config(project)
-    paths = manager.get_paths(project)
-    root = os.path.join(STORAGE_ROOT, project) if not os.path.isabs(paths["root"]) else paths["root"]
-    index_dir = os.path.join(root, "index")
-    cfg["output_dir"] = root
-    cfg["index_dir"] = index_dir
-    cfg["results_file"] = cfg.get("results_file", "results.jsonl")
-    return cfg
+    return manager.projects.load_dict(project)
 
 
 def ensure_chat_payload_shape(payload):
-    if isinstance(payload, list):
-        msgs = []
-        for item in payload:
-            if isinstance(item, (list, tuple)) and len(item) == 2:
-                msgs.append({"role": "user", "content": item[0]})
-                msgs.append({"role": "assistant", "content": item[1]})
-        return {"title": "Imported Chat", "settings": {"score_threshold": 0.5}, "messages": msgs}
-    payload.setdefault("title", "Untitled Chat")
-    payload.setdefault("settings", {"score_threshold": 0.5})
-    payload.setdefault("messages", [])
-    payload["settings"].setdefault("score_threshold", 0.5)
-    payload["settings"].setdefault("memory_reset_at", 0)
-    return payload
+    title = payload.get("title", "Untitled Chat") if isinstance(payload, dict) else "Imported Chat"
+    return FileChatRepository.normalize_payload(payload, title=title)
 
 
 def build_memory_context(messages, max_chars: int = 2000, leave_last_k: int = 0) -> str:
@@ -73,23 +55,25 @@ def _messages_for_memory(payload: dict) -> list:
 def rebuild_pipelines_for_project(project: str, manager, api_key: str | None = None):
     if not project or project == "No projects yet":
         return
-    cfg = load_project_config(project, manager)
-    os.makedirs(cfg["output_dir"], exist_ok=True)
-    os.makedirs(cfg["index_dir"], exist_ok=True)
+    cfg = ProjectConfig.from_dict(load_project_config(project, manager))
     key = api_key or st.session_state.get("user_openai_key")
     try:
-        st.session_state.ingest_pipeline, st.session_state.query_pipeline = build_pipelines(cfg, api_key=key)
+        runtime = build_runtime(cfg, api_key=key)
     except RuntimeError as e:
+        st.session_state.runtime = None
         st.session_state.ingest_pipeline = None
         st.session_state.query_pipeline = None
         st.warning(str(e))
         return
+    st.session_state.runtime = runtime
+    st.session_state.ingest_pipeline = runtime.ingest_pipeline
+    st.session_state.query_pipeline = runtime.query_pipeline
     st.session_state.missing_key_notice = not bool(key)
     st.session_state.active_project = project
     st.session_state.active_chat = None
     st.session_state.chat_payload = {
         "title": None,
-        "settings": {"score_threshold": float(cfg.get("score_threshold", 0.5))},
+        "settings": {"score_threshold": float(cfg.score_threshold), "memory_reset_at": 0},
         "messages": [],
     }
 
@@ -99,6 +83,7 @@ def ensure_project_pipelines(selected_project: str, manager):
     if (
         ("active_project" not in st.session_state)
         or (st.session_state.active_project != selected_project)
+        or (st.session_state.runtime is None)
         or (st.session_state.ingest_pipeline is None)
         or (has_key and st.session_state.query_pipeline is None)
     ):

@@ -11,7 +11,7 @@ from webly.ui.project import (
 
 
 def render_chat_tab(current_project: str, cfg: dict, manager):
-    chats = manager.list_chats(current_project)
+    chats = manager.chats.list(current_project)
     active = st.session_state.get("active_chat")
 
     col_a, col_b = st.columns([3, 1])
@@ -27,10 +27,10 @@ def render_chat_tab(current_project: str, cfg: dict, manager):
             st.session_state.active_chat = new_name
             st.session_state.chat_payload = {
                 "title": new_name,
-                "settings": {"score_threshold": cfg.get("score_threshold", 0.5)},
+                "settings": {"score_threshold": cfg.get("score_threshold", 0.5), "memory_reset_at": 0},
                 "messages": [],
             }
-            manager.save_chat(current_project, new_name, st.session_state.chat_payload)
+            manager.chats.save(current_project, new_name, st.session_state.chat_payload)
             st.rerun()
 
     for chat_name in chats:
@@ -40,7 +40,7 @@ def render_chat_tab(current_project: str, cfg: dict, manager):
         with c1:
             if st.button(label, key=f"sel_{chat_name}"):
                 st.session_state.active_chat = chat_name
-                payload = manager.load_chat(current_project, chat_name)
+                payload = manager.chats.load(current_project, chat_name)
                 st.session_state.chat_payload = ensure_chat_payload_shape(payload)
                 st.rerun()
         with c2:
@@ -49,21 +49,21 @@ def render_chat_tab(current_project: str, cfg: dict, manager):
                     payload = ensure_chat_payload_shape(st.session_state.get("chat_payload", {}))
                     payload["settings"]["memory_reset_at"] = len(payload.get("messages", []))
                     st.session_state.chat_payload = payload
-                    manager.save_chat(current_project, chat_name, payload)
+                    manager.chats.save(current_project, chat_name, payload)
                 else:
-                    payload = manager.load_chat(current_project, chat_name)
+                    payload = manager.chats.load(current_project, chat_name)
                     payload = ensure_chat_payload_shape(payload)
                     payload["settings"]["memory_reset_at"] = len(payload.get("messages", []))
-                    manager.save_chat(current_project, chat_name, payload)
+                    manager.chats.save(current_project, chat_name, payload)
                 st.rerun()
         with c3:
             if st.button("Delete", key=f"del_{chat_name}"):
-                manager.delete_chat(current_project, chat_name)
+                manager.chats.delete(current_project, chat_name)
                 if st.session_state.get("active_chat") == chat_name:
                     st.session_state.active_chat = None
                     st.session_state.chat_payload = {
                         "title": None,
-                        "settings": {"score_threshold": 0.5},
+                        "settings": {"score_threshold": 0.5, "memory_reset_at": 0},
                         "messages": [],
                     }
                 st.rerun()
@@ -87,30 +87,23 @@ def render_chat_tab(current_project: str, cfg: dict, manager):
             elif not _index_dir_ready(cfg_cur["index_dir"]):
                 assistant_reply = "No index found. Please run indexing first in the Run tab."
             else:
-                db = st.session_state.ingest_pipeline.db
-                index_ready = getattr(db, "index", None) is not None
-                if not index_ready:
-                    try:
-                        db.load(cfg_cur["index_dir"])
-                        index_ready = True
-                    except Exception as e:
-                        assistant_reply = f"Failed to load index: {e}"
-                if index_ready:
+                runtime = st.session_state.get("runtime")
+                if runtime is None:
+                    assistant_reply = "Project runtime is unavailable. Rebuild the project pipelines first."
+                else:
                     try:
                         memory_ctx = build_memory_context(
                             _messages_for_memory(payload)[:-1],
                             max_chars=2000,
                             leave_last_k=int(cfg_cur.get("leave_last_k", 0) or 0),
                         )
-                        assistant_reply = st.session_state.query_pipeline.query(
-                            user_input, memory_context=memory_ctx
-                        )
+                        assistant_reply = runtime.query(user_input, memory_context=memory_ctx)
                     except Exception as e:
                         assistant_reply = f"Query failed: {e}"
 
             payload["messages"].append({"role": "assistant", "content": assistant_reply})
             st.session_state.chat_payload = payload
-            manager.save_chat(current_project, st.session_state.active_chat, payload)
+            manager.chats.save(current_project, st.session_state.active_chat, payload)
             st.chat_message("assistant").write(assistant_reply)
     else:
         st.info("Create or select a chat to start.")

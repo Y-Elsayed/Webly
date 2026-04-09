@@ -21,7 +21,7 @@ def _get_manager():
 
 
 manager = _get_manager()
-projects = manager.list_projects()
+projects = manager.projects.list()
 
 render_sidebar(manager, projects)
 

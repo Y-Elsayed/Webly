@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from webly.crawl.crawler import Crawler
 from webly.embedder.base_embedder import Embedder
+from webly.pipeline.embedding_text import chunk_text_for_embedding, count_tokens, hard_char_splits, max_input_tokens
 from webly.vector_index.vector_db import VectorDatabase
 
 try:
@@ -522,69 +523,13 @@ class IngestPipeline:
             self.logger.warning(f"Failed to write checkpoint to {path}: {e}")
 
     def _max_input_tokens(self) -> int:
-        for attr in ("max_input_tokens", "max_tokens", "context_size", "max_seq_len"):
-            v = getattr(self.embedder, attr, None)
-            if isinstance(v, int) and v > 0:
-                return v
-        return 8192
+        return max_input_tokens(self.embedder)
 
     def _count_tokens(self, text: str) -> int:
-        if hasattr(self.embedder, "count_tokens"):
-            try:
-                return int(self.embedder.count_tokens(text))
-            except Exception as e:
-                self.logger.debug(f"embedder.count_tokens failed, using char-count heuristic: {e}")
-        return max(1, len(text) // 4)
+        return count_tokens(self.embedder, text, self.logger)
 
     def _hard_char_splits(self, text: str, max_tokens: int) -> list[str]:
-        char_budget = max(800, max_tokens * 4)
-        out, i, n = [], 0, len(text)
-        while i < n:
-            out.append(text[i : min(n, i + char_budget)])
-            i += char_budget
-        return out
+        return hard_char_splits(text, max_tokens)
 
     def _chunk_for_embedding(self, text: str, safety_ratio: float = 0.9) -> list[str]:
-        ratio = getattr(self.embedder, "safety_ratio", safety_ratio)
-        max_tok = int(self._max_input_tokens() * ratio)
-        if self._count_tokens(text) <= max_tok:
-            return [text]
-        paras = re.split(r"\n{2,}", text)
-        chunks, cur, cur_toks = [], [], 0
-
-        def flush():
-            nonlocal chunks, cur, cur_toks
-            if cur:
-                joined = "\n\n".join(cur).strip()
-                if joined:
-                    chunks.append(joined)
-            cur, cur_toks = [], 0
-
-        for p in paras:
-            ptok = self._count_tokens(p)
-            if ptok > max_tok:
-                sents = re.split(r"(?<=[.!?])\s+", p)
-                for s in sents:
-                    stok = self._count_tokens(s)
-                    if stok > max_tok:
-                        for piece in self._hard_char_splits(s, max_tok):
-                            if self._count_tokens(piece) > max_tok:
-                                chunks.append(piece)
-                            else:
-                                if cur_toks + self._count_tokens(piece) > max_tok:
-                                    flush()
-                                cur.append(piece)
-                                cur_toks += self._count_tokens(piece)
-                        continue
-                    if cur_toks + stok > max_tok:
-                        flush()
-                    cur.append(s)
-                    cur_toks += stok
-                flush()
-            else:
-                if cur_toks + ptok > max_tok:
-                    flush()
-                cur.append(p)
-                cur_toks += ptok
-        flush()
-        return [c for c in chunks if c]
+        return chunk_text_for_embedding(self.embedder, text, self.logger, safety_ratio=safety_ratio)

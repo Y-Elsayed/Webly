@@ -291,7 +291,7 @@ def render_settings_tab(current_project: str, cfg: dict, manager):
         cfg_edit["builder_max_rounds"] = int(builder_max_rounds)
         cfg_edit["leave_last_k"] = int(leave_last_k)
 
-        manager.save_config(current_project, cfg_edit)
+        manager.projects.save(current_project, cfg_edit)
         rebuild_pipelines_for_project(current_project, manager)
         if auto_msg:
             st.info(auto_msg)
