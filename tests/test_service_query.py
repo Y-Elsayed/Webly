@@ -34,6 +34,28 @@ def test_query_endpoint_returns_structured_query_result(tmp_path, monkeypatch):
         "build_project_runtime",
         lambda _project: _DummyRuntime(),
     )
+    monkeypatch.setattr(
+        app.state.container.runtime_service,
+        "status",
+        lambda _project: {
+            "config": app.state.container.project_service.get_project("Docs"),
+            "paths": app.state.container.project_service.projects.get_paths("Docs"),
+            "results_ready": True,
+            "index_ready": True,
+            "query_ready": True,
+            "chat_ready": True,
+            "capabilities": {
+                "has_openai_api_key": True,
+                "uses_openai_embeddings": False,
+                "uses_summary_model": False,
+                "requires_openai_for_ingest": False,
+                "requires_openai_for_query": True,
+                "ingest_pipeline_available": True,
+                "query_pipeline_available": True,
+                "blockers": [],
+            },
+        },
+    )
 
     response = client.post(
         "/v1/projects/Docs/query",
@@ -61,3 +83,27 @@ def test_query_endpoint_returns_404_for_missing_project(tmp_path):
     response = client.post("/v1/projects/Missing/query", json={"question": "hello"})
 
     assert response.status_code == 404
+
+
+def test_query_endpoint_returns_503_when_query_runtime_is_unavailable(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    client = TestClient(create_app(storage_root=str(tmp_path)))
+    create = client.post(
+        "/v1/projects",
+        json={
+            "name": "Docs",
+            "config": {
+                "start_url": "https://example.com/docs",
+                "allowed_domains": ["example.com"],
+                "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+            },
+        },
+    )
+    assert create.status_code == 201
+
+    response = client.post("/v1/projects/Docs/query", json={"question": "hello"})
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "OPENAI_API_KEY is required for query and chat responses."
+    }

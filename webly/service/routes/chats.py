@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Response, status
 
 from webly.service.dependencies import get_chat_service
 from webly.service.schemas import (
@@ -27,10 +27,7 @@ def list_project_chats(
     project: str,
     chat_service: ChatService = Depends(get_chat_service),
 ) -> ChatListResponse:
-    try:
-        return ChatListResponse(items=chat_service.list_chats(project))
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return ChatListResponse(items=chat_service.list_chats(project))
 
 
 @router.get(
@@ -43,10 +40,7 @@ def get_project_chat(
     chat: str,
     chat_service: ChatService = Depends(get_chat_service),
 ) -> ChatResponse:
-    try:
-        payload = chat_service.get_chat(project, chat)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    payload = chat_service.get_chat(project, chat)
     return _chat_response(payload)
 
 
@@ -61,10 +55,7 @@ def save_project_chat(
     request: ChatUpdateRequest,
     chat_service: ChatService = Depends(get_chat_service),
 ) -> ChatResponse:
-    try:
-        payload = chat_service.save_chat(project, chat, request.model_dump(exclude_none=True))
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    payload = chat_service.save_chat(project, chat, request.model_dump(exclude_none=True))
     return _chat_response(payload)
 
 
@@ -79,8 +70,5 @@ def delete_project_chat(
     chat: str,
     chat_service: ChatService = Depends(get_chat_service),
 ) -> Response:
-    try:
-        chat_service.delete_chat(project, chat)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    chat_service.delete_chat(project, chat)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

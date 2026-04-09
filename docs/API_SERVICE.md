@@ -42,6 +42,29 @@ WEBLY_STORAGE_ROOT=./websites_storage uvicorn webly.service.app:app --host 127.0
 - `PUT /v1/projects/{project}/chats/{chat}`
 - `DELETE /v1/projects/{project}/chats/{chat}`
 
+## Status Semantics
+
+`GET /v1/projects/{project}/status` is a lightweight readiness check. It does not fully bootstrap the runtime just to answer whether the project is queryable.
+
+The response includes:
+- `results_ready`
+- `index_ready`
+- `query_ready`
+- `chat_ready`
+- `capabilities`
+
+`capabilities` currently reports:
+- `has_openai_api_key`
+- `uses_openai_embeddings`
+- `uses_summary_model`
+- `requires_openai_for_ingest`
+- `requires_openai_for_query`
+- `ingest_pipeline_available`
+- `query_pipeline_available`
+- `blockers`
+
+The `blockers` list explains known reasons a project cannot currently ingest or answer queries, such as a missing `OPENAI_API_KEY` or a missing index.
+
 ## Example: Create a Project
 
 ```bash
@@ -103,3 +126,19 @@ The chat payload matches Webly's existing filesystem chat schema:
 - `GET /status` is lightweight and does not force a full runtime bootstrap just to report readiness.
 - `POST /ingest` is currently synchronous.
 - The service does not currently implement auth, multi-tenant workspaces, background workers, or streaming responses.
+
+## Error Responses
+
+The service returns a consistent JSON error shape:
+
+```json
+{
+  "detail": "Human-readable error message"
+}
+```
+
+Current status-code policy:
+- `400` invalid request payload or bad operation arguments
+- `404` missing project or chat
+- `409` conflicting create operations
+- `503` runtime not ready or required dependencies/configuration unavailable

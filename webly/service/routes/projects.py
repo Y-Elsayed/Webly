@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Response, status
 
 from webly.service.dependencies import get_project_service, get_runtime_service
 from webly.service.schemas import (
@@ -42,10 +42,7 @@ def create_project(
     request: ProjectCreateRequest,
     project_service: ProjectService = Depends(get_project_service),
 ) -> ProjectResponse:
-    try:
-        config = project_service.create_project(request.name, request.config.model_dump())
-    except FileExistsError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    config = project_service.create_project(request.name, request.config.model_dump())
     paths = project_service.projects.get_paths(request.name)
     return _project_response(request.name, config, paths)
 
@@ -59,10 +56,7 @@ def get_project(
     project: str,
     project_service: ProjectService = Depends(get_project_service),
 ) -> ProjectResponse:
-    try:
-        config = project_service.get_project(project)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    config = project_service.get_project(project)
     paths = project_service.projects.get_paths(project)
     return _project_response(project, config, paths)
 
@@ -77,10 +71,7 @@ def update_project(
     request: ProjectUpdateRequest,
     project_service: ProjectService = Depends(get_project_service),
 ) -> ProjectResponse:
-    try:
-        config = project_service.update_project(project, request.config.model_dump(exclude_none=True))
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    config = project_service.update_project(project, request.config.model_dump(exclude_none=True))
     paths = project_service.projects.get_paths(project)
     return _project_response(project, config, paths)
 
@@ -95,10 +86,7 @@ def delete_project(
     project: str,
     project_service: ProjectService = Depends(get_project_service),
 ) -> Response:
-    try:
-        project_service.delete_project(project)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    project_service.delete_project(project)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -109,47 +97,29 @@ def delete_project(
 )
 def get_project_status(
     project: str,
-    project_service: ProjectService = Depends(get_project_service),
     runtime_service: RuntimeService = Depends(get_runtime_service),
 ) -> ProjectStatusResponse:
-    try:
-        config = project_service.get_project(project)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-
-    paths = project_service.projects.get_paths(project)
-    results_ready = project_service.results_ready(project)
-    index_ready = project_service.index_ready(project)
-    uses_openai_embeddings = config.embedding_model.startswith("openai:")
-    uses_summary_model = bool(config.summary_model)
-    has_openai_api_key = False
-    query_pipeline_available = False
-    try:
-        runtime_status = runtime_service.status(project)
-        has_openai_api_key = bool(runtime_status["capabilities"]["has_openai_api_key"])
-        query_pipeline_available = bool(runtime_status["capabilities"]["query_pipeline_available"])
-        index_ready = bool(runtime_status["index_ready"])
-        results_ready = bool(runtime_status["results_ready"])
-        query_ready = bool(runtime_status["query_ready"])
-        chat_ready = bool(runtime_status["chat_ready"])
-    except RuntimeError:
-        query_ready = False
-        chat_ready = False
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    runtime_status = runtime_service.status(project)
+    config = runtime_status["config"]
+    paths = runtime_status["paths"]
+    capabilities = runtime_status["capabilities"]
 
     return ProjectStatusResponse(
         name=project,
         config=config.to_dict(),
         paths=ProjectPathsResponse(**paths.as_dict()),
-        results_ready=results_ready,
-        index_ready=index_ready,
-        query_ready=query_ready,
-        chat_ready=chat_ready,
+        results_ready=bool(runtime_status["results_ready"]),
+        index_ready=bool(runtime_status["index_ready"]),
+        query_ready=bool(runtime_status["query_ready"]),
+        chat_ready=bool(runtime_status["chat_ready"]),
         capabilities=RuntimeCapabilitiesResponse(
-            has_openai_api_key=has_openai_api_key,
-            uses_openai_embeddings=uses_openai_embeddings,
-            uses_summary_model=uses_summary_model,
-            query_pipeline_available=query_pipeline_available,
+            has_openai_api_key=bool(capabilities["has_openai_api_key"]),
+            uses_openai_embeddings=bool(capabilities["uses_openai_embeddings"]),
+            uses_summary_model=bool(capabilities["uses_summary_model"]),
+            requires_openai_for_ingest=bool(capabilities["requires_openai_for_ingest"]),
+            requires_openai_for_query=bool(capabilities["requires_openai_for_query"]),
+            ingest_pipeline_available=bool(capabilities["ingest_pipeline_available"]),
+            query_pipeline_available=bool(capabilities["query_pipeline_available"]),
+            blockers=list(capabilities["blockers"]),
         ),
     )
