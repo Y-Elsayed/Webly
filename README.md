@@ -25,14 +25,16 @@ User guide:
 - Run an agentic builder retrieval mode with concept coverage checks and follow-up retrieval rounds
 
 ## Architecture
-- `webly/framework.py`: pipeline factory (`build_pipelines`)
+- `webly/project_config.py`: typed project config normalization + validation
+- `webly/runtime.py`: runtime bootstrap and index/query lifecycle (`build_runtime`)
+- `webly/framework.py`: compatibility factory (`build_pipelines`)
 - `webly/chatbot/prompts/`: prompt files used by retrieval/chat agents
-- `webly/crawl/` + `webly/webcreeper/`: crawling
+- `webly/crawl/` + `webly/webcreeper/`: crawling runtime
 - `webly/processors/`: extraction, chunking, summarization
 - `webly/embedder/`: embedding backends
 - `webly/pipeline/`: ingest and query orchestration
 - `webly/vector_index/`: FAISS wrapper
-- `webly/storage/`: project/chat persistence
+- `webly/storage/`: repository-backed project/chat persistence
 
 ## Framework Quick Start
 Python `3.11.7` is recommended.
@@ -57,15 +59,17 @@ Use:
 
 Minimal framework usage:
 ```python
-from webly import build_pipelines
+from webly import build_runtime
 
-config = {
+runtime = build_runtime({
     "start_url": "https://example.com/docs",
     "output_dir": "./data/example",
     "index_dir": "./data/example/index",
-}
+})
 
-ingest_pipeline, query_pipeline = build_pipelines(config)
+runtime.run_ingest(mode="both")
+answer = runtime.query("What does this site document?")
+result = runtime.query_result("What does this site document?")
 ```
 
 Windows PowerShell alternative for `.env`:
@@ -106,6 +110,7 @@ Current defaults:
 - `retrieval_mode = "builder"`
 - `builder_max_rounds = 1`
 - `leave_last_k = 2`
+- `score_threshold = 0.5` for vector similarity filtering
 
 ## Development
 ```bash
