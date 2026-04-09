@@ -15,6 +15,7 @@ Grounding policy:
 
 User guide:
 - GUI usage guide: `docs/USER_GUIDE.md`
+- API service guide: `docs/API_SERVICE.md`
 
 ## What It Does
 - Crawl websites with policy controls (domains, depth, robots, URL filters)
@@ -48,12 +49,14 @@ cp .env.example .env
 Optional extras:
 ```bash
 pip install .[ui]
+pip install .[api]
 pip install .[hf]
 pip install .[all]
 ```
 
 Use:
 - `.[ui]` for the Streamlit app
+- `.[api]` for the local FastAPI service
 - `.[hf]` for local Hugging Face embeddings
 - `.[all]` for both
 
@@ -82,6 +85,29 @@ Copy-Item .env.example .env
 pip install .[ui]
 streamlit run app.py
 ```
+
+## API Service
+```bash
+pip install .[api]
+uvicorn webly.service.app:app --host 127.0.0.1 --port 8000
+```
+
+Current local service endpoints:
+- `GET /healthz`
+- `GET /v1/projects`
+- `POST /v1/projects`
+- `GET /v1/projects/{project}`
+- `PATCH /v1/projects/{project}`
+- `DELETE /v1/projects/{project}`
+- `GET /v1/projects/{project}/status`
+- `POST /v1/projects/{project}/query`
+- `POST /v1/projects/{project}/ingest`
+- `GET /v1/projects/{project}/chats`
+- `GET /v1/projects/{project}/chats/{chat}`
+- `PUT /v1/projects/{project}/chats/{chat}`
+- `DELETE /v1/projects/{project}/chats/{chat}`
+
+See `docs/API_SERVICE.md` for request and response examples.
 
 ## Run with Docker
 ```bash
@@ -124,7 +150,7 @@ See `CONTRIBUTING.md`.
 
 ## Roadmap (High Level)
 See `ROADMAP.md` for a component-by-component plan with `Done`, `Next`, and `Later`.
-Key near-term focus includes better user-intent parsing and reasoning-aware retrieval quality.
+Key near-term focus includes further retrieval decomposition, evaluation, and service hardening.
 
 ## Community and Policies
 - Contributing: `CONTRIBUTING.md`
