@@ -48,6 +48,7 @@ class Crawler(BaseCrawler):
             settings.update(settings_override)
 
         atlas = Atlas(settings=settings)
+        self._atlas = atlas
         callback = on_page_crawled or self.default_callback
         atlas.crawl(self.start_url, on_page_crawled=callback)
         if save_sitemap:

@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from webly.chatbot.context_builder_agent import ContextBuilderAgent
+from webly.query_result import QueryResult, SourceRef
 
 
 class QueryPipeline:
@@ -40,6 +41,7 @@ class QueryPipeline:
         debug: bool = False,
         retrieval_mode: str = "builder",
         builder_max_rounds: int = 1,
+        score_threshold: float = 0.0,
     ):
         self.chat_agent = chat_agent
         self.recrawl_fn = recrawl_fn
@@ -61,6 +63,7 @@ class QueryPipeline:
         self.debug = debug
         self.retrieval_mode = retrieval_mode
         self.builder_max_rounds = max(0, int(builder_max_rounds))
+        self.score_threshold = max(0.0, float(score_threshold or 0.0))
         self.context_builder = ContextBuilderAgent(planner_llm=getattr(self.chat_agent, "chatbot", None))
         self.logger = logging.getLogger(self.__class__.__name__)
 
@@ -75,9 +78,17 @@ class QueryPipeline:
         self._bm25_k1 = 1.5
         self._bm25_b = 0.75
         self._last_used_sources: List[Dict[str, str]] = []
+        self._last_supported: bool = False
+        self._last_trace: Dict[str, Any] = {}
 
     # ---------------- Core entrypoint ----------------
     def query(self, question: str, retry_on_empty: bool = False, memory_context: str = "") -> str:
+        return self.query_result(question, retry_on_empty=retry_on_empty, memory_context=memory_context).answer
+
+    def query_result(self, question: str, retry_on_empty: bool = False, memory_context: str = "") -> QueryResult:
+        self._last_supported = False
+        self._last_trace = {}
+        self._last_used_sources = []
         if (self.retrieval_mode or "classic").lower() == "builder":
             return self._query_builder(question, retry_on_empty=retry_on_empty, memory_context=memory_context)
 
@@ -103,7 +114,17 @@ class QueryPipeline:
             initial_results = self._search(question_for_search, self.top_k_first_pass, tag="initial-after-recrawl")
 
         if not initial_results:
-            return self._fallback_message([], question)
+            answer, supported = self._fallback_payload([], question)
+            return self._finalize_result(
+                answer,
+                supported,
+                {
+                    "mode": "classic",
+                    "query": question,
+                    "retry_on_empty": retry_on_empty,
+                    "initial_result_count": 0,
+                },
+            )
 
         saved_results: List[Dict[str, Any]] = []
         saved_results.extend(initial_results)
@@ -131,7 +152,18 @@ class QueryPipeline:
 
         # If we can already answer, do it
         if self.enable_answerability_check and self.chat_agent._judge_answerability(question_for_answer, context):
-            return self.chat_agent.answer(question_for_answer, context)
+            return self._finalize_result(
+                self.chat_agent.answer(question_for_answer, context),
+                True,
+                {
+                    "mode": "classic",
+                    "query": question,
+                    "retry_on_empty": retry_on_empty,
+                    "initial_result_count": len(initial_results),
+                    "combined_result_count": len(combined),
+                    "answer_path": "answerable_initial",
+                },
+            )
 
         # === Iterative multi-hop: rewrite + targeted searches ===
         # We'll run up to 2 iterative hops (total 3 attempts counting initial)
@@ -184,16 +216,50 @@ class QueryPipeline:
                 self.logger.debug(f"Context after hop {hop}: {len(context)} chars")
 
             if self.enable_answerability_check and self.chat_agent._judge_answerability(question_for_answer, context):
-                return self.chat_agent.answer(question_for_answer, context)
+                return self._finalize_result(
+                    self.chat_agent.answer(question_for_answer, context),
+                    True,
+                    {
+                        "mode": "classic",
+                        "query": question,
+                        "retry_on_empty": retry_on_empty,
+                        "initial_result_count": len(initial_results),
+                        "combined_result_count": len(combined),
+                        "answer_path": f"answerable_hop_{hop}",
+                    },
+                )
 
             tried_queries.extend(subqueries)
 
         # If we still can't answer confidently, return a natural fallback with helpful links
         if self.allow_best_effort and combined:
-            return self.chat_agent.answer(question_for_answer, context)
-        return self._fallback_message(combined, question_for_answer)
+            return self._finalize_result(
+                self.chat_agent.answer(question_for_answer, context),
+                False,
+                {
+                    "mode": "classic",
+                    "query": question,
+                    "retry_on_empty": retry_on_empty,
+                    "initial_result_count": len(initial_results),
+                    "combined_result_count": len(combined),
+                    "answer_path": "best_effort",
+                },
+            )
+        answer, supported = self._fallback_payload(combined, question_for_answer)
+        return self._finalize_result(
+            answer,
+            supported,
+            {
+                "mode": "classic",
+                "query": question,
+                "retry_on_empty": retry_on_empty,
+                "initial_result_count": len(initial_results),
+                "combined_result_count": len(combined),
+                "answer_path": "fallback",
+            },
+        )
 
-    def _query_builder(self, question: str, retry_on_empty: bool = False, memory_context: str = "") -> str:
+    def _query_builder(self, question: str, retry_on_empty: bool = False, memory_context: str = "") -> QueryResult:
         if self.debug:
             self.logger.debug(f"[builder] User query: {question}")
             if memory_context:
@@ -213,7 +279,16 @@ class QueryPipeline:
         if route_mode == "transform_only":
             prior = (memory_context or "").strip()
             if not prior:
-                return "I don't have enough prior conversation context to transform yet."
+                return self._finalize_result(
+                    "I don't have enough prior conversation context to transform yet.",
+                    False,
+                    {
+                        "mode": "builder",
+                        "route_mode": route_mode,
+                        "query": question,
+                        "concepts": concepts,
+                    },
+                )
             prompt = (
                 "You are transforming a prior answer. Follow the user's instruction exactly.\n"
                 "Do not add new facts that are not present in prior context.\n\n"
@@ -222,8 +297,28 @@ class QueryPipeline:
             )
             transformed = (self.chat_agent.chatbot.generate(prompt) or "").strip()
             if transformed:
-                return transformed
-            return "I couldn't transform the previous response from the available memory."
+                return self._finalize_result(
+                    transformed,
+                    True,
+                    {
+                        "mode": "builder",
+                        "route_mode": route_mode,
+                        "query": question,
+                        "concepts": concepts,
+                        "answer_path": "transform_only",
+                    },
+                )
+            return self._finalize_result(
+                "I couldn't transform the previous response from the available memory.",
+                False,
+                {
+                    "mode": "builder",
+                    "route_mode": route_mode,
+                    "query": question,
+                    "concepts": concepts,
+                    "answer_path": "transform_only_failed",
+                },
+            )
 
         if route_mode == "retrieve_followup":
             question_for_search = standalone_query or question
@@ -249,7 +344,18 @@ class QueryPipeline:
             initial_results = self._search(question_for_search, self.top_k_first_pass, tag="initial-after-recrawl")
 
         if not initial_results:
-            return self._fallback_message([], question)
+            answer, supported = self._fallback_payload([], question)
+            return self._finalize_result(
+                answer,
+                supported,
+                {
+                    "mode": "builder",
+                    "route_mode": route_mode,
+                    "query": question,
+                    "concepts": concepts,
+                    "initial_result_count": 0,
+                },
+            )
 
         saved_results: List[Dict[str, Any]] = []
         saved_results.extend(initial_results)
@@ -300,19 +406,88 @@ class QueryPipeline:
             )
 
         if self.enable_answerability_check and self.chat_agent._judge_answerability(question_for_answer, context):
-            return self.chat_agent.answer(question_for_answer, context)
+            return self._finalize_result(
+                self.chat_agent.answer(question_for_answer, context),
+                True,
+                {
+                    "mode": "builder",
+                    "route_mode": route_mode,
+                    "query": question,
+                    "concepts": concepts,
+                    "coverage": coverage,
+                    "combined_result_count": len(combined),
+                    "answer_path": "answerable",
+                },
+            )
 
         if self.allow_best_effort and combined:
-            return self._best_effort_with_links(
+            answer, supported = self._best_effort_payload(
                 question_for_answer=question_for_answer,
                 context=context,
                 concepts=concepts,
                 coverage=coverage,
                 results=combined,
             )
-        return self._fallback_message(combined, question_for_answer)
+            return self._finalize_result(
+                answer,
+                supported,
+                {
+                    "mode": "builder",
+                    "route_mode": route_mode,
+                    "query": question,
+                    "concepts": concepts,
+                    "coverage": coverage,
+                    "combined_result_count": len(combined),
+                    "answer_path": "best_effort",
+                },
+            )
+        answer, supported = self._fallback_payload(combined, question_for_answer)
+        return self._finalize_result(
+            answer,
+            supported,
+            {
+                "mode": "builder",
+                "route_mode": route_mode,
+                "query": question,
+                "concepts": concepts,
+                "coverage": coverage,
+                "combined_result_count": len(combined),
+                "answer_path": "fallback",
+            },
+        )
 
     # ---------------- Helpers ----------------
+    def _finalize_result(self, answer: str, supported: bool, trace: Optional[Dict[str, Any]] = None) -> QueryResult:
+        self._last_supported = bool(supported)
+        self._last_trace = dict(trace or {})
+        return QueryResult(
+            answer=answer,
+            supported=self._last_supported,
+            sources=self._current_sources(),
+            trace=dict(self._last_trace),
+        )
+
+    def _current_sources(self) -> List[SourceRef]:
+        sources: List[SourceRef] = []
+        seen: set[tuple[str, str]] = set()
+        for item in self._last_used_sources:
+            url = str(item.get("url") or "").strip()
+            chunk_id = str(item.get("chunk_id") or "").strip()
+            if not url or not chunk_id:
+                continue
+            key = (chunk_id, url)
+            if key in seen:
+                continue
+            seen.add(key)
+            sources.append(
+                SourceRef(
+                    chunk_id=chunk_id,
+                    url=url,
+                    section=str(item.get("section") or ""),
+                )
+            )
+        return sources
+
     def _search(self, query: Optional[Union[str, List[str]]], k: int, tag: str) -> List[Dict[str, Any]]:
         if not query:
             return []
@@ -322,6 +497,12 @@ class QueryPipeline:
             # Vector search
             q_emb = self.chat_agent.embedder.embed(q)
             results = self.chat_agent.vector_db.search(q_emb, top_k=k) or []
+            if self.score_threshold > 0.0:
+                results = [
+                    record
+                    for record in results
+                    if float(record.get("score") or 0.0) >= self.score_threshold
+                ]
             for i, r in enumerate(results):
                 r.setdefault("_meta_rank", i)
                 r.setdefault("_origin", tag)
@@ -644,18 +825,19 @@ class QueryPipeline:
             return min(int(base * 5), 100000)
         return base
 
-    def _fallback_message(self, results: List[Dict[str, Any]], question: str) -> str:
+    def _fallback_payload(self, results: List[Dict[str, Any]], question: str) -> Tuple[str, bool]:
         """
         Natural fallback when we can't find enough info. Provide a few helpful links if any
         retrieved items exist; otherwise a concise apology.
         """
         if not results:
-            return "I couldn't find anything on this site related to your question."
+            self._last_used_sources = []
+            return "I couldn't find anything on this site related to your question.", False
 
         context = self._assemble_context(results[: min(8, len(results))], max_chars=min(self.max_context_chars, 8000))
         _, supported = self.chat_agent.answer_with_support(question, context)
         if supported != "Y":
-            return "I couldn't find enough information on this site to answer that directly."
+            return "I couldn't find enough information on this site to answer that directly.", False
 
         # Pick up to 3 distinct useful URLs with optional section labels
         links: List[str] = []
@@ -674,21 +856,24 @@ class QueryPipeline:
                 break
 
         if not links:
-            return "I couldn't find enough relevant information here to answer that."
+            return "I couldn't find enough relevant information here to answer that.", False
 
         return (
             "I couldn't find enough information on this site to answer that directly. "
             "These pages may help:\n" + "\n".join(links)
-        )
+        ), False
 
-    def _best_effort_with_links(
+    def _fallback_message(self, results: List[Dict[str, Any]], question: str) -> str:
+        return self._fallback_payload(results, question)[0]
+
+    def _best_effort_payload(
         self,
         question_for_answer: str,
         context: str,
         concepts: List[str],
         coverage: Dict[str, List[str]],
         results: List[Dict[str, Any]],
-    ) -> str:
+    ) -> Tuple[str, bool]:
         """
         Best-effort response when context is partially relevant but not fully answerable.
         Includes explicit uncertainty + concept-oriented links for follow-up reading.
@@ -711,14 +896,30 @@ class QueryPipeline:
             base_answer = (base_answer or "").strip()
 
         if not used_urls:
-            return base_answer
+            return base_answer, str(supported).upper() == "Y"
         if str(supported).upper() != "Y":
-            return base_answer
+            return base_answer, False
 
         lines = ["Read more:"]
         for u in used_urls:
             lines.append(f"- {u}")
-        return f"{base_answer}\n\n" + "\n".join(lines)
+        return f"{base_answer}\n\n" + "\n".join(lines), True
+
+    def _best_effort_with_links(
+        self,
+        question_for_answer: str,
+        context: str,
+        concepts: List[str],
+        coverage: Dict[str, List[str]],
+        results: List[Dict[str, Any]],
+    ) -> str:
+        return self._best_effort_payload(
+            question_for_answer=question_for_answer,
+            context=context,
+            concepts=concepts,
+            coverage=coverage,
+            results=results,
+        )[0]
 
     def _read_more_urls_from_used_sources(self, limit: int = 3) -> List[str]:
         links = []

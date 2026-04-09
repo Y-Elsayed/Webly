@@ -1,5 +1,3 @@
-import os
-
 import streamlit as st
 
 from webly.chatbot.prompts.system_prompts import AnsweringMode
@@ -14,10 +12,12 @@ from webly.ui.project import (
     load_project_config,
     rebuild_pipelines_for_project,
 )
-from webly.ui.state import EMBEDDER_OPTIONS, STORAGE_ROOT
+from webly.ui.state import EMBEDDER_OPTIONS
 
 
 def render_sidebar(manager, projects: list) -> str | None:
+    project_repo = manager.projects
+
     with st.sidebar:
         st.title("Webly")
         st.caption("Website to searchable knowledge base")
@@ -107,13 +107,8 @@ def render_sidebar(manager, projects: list) -> str | None:
                                 "block_url_patterns": [],
                                 "seed_urls": [],
                             }
-                            root = os.path.join(STORAGE_ROOT, new_name)
-                            index_dir = os.path.join(root, "index")
-                            os.makedirs(index_dir, exist_ok=True)
-                            cfg["output_dir"] = root
-                            cfg["index_dir"] = index_dir
                             try:
-                                manager.create_project(new_name, cfg)
+                                project_repo.create(new_name, cfg)
                                 st.session_state.show_new_project_form = False
                                 st.session_state.project_selector = new_name
                                 rebuild_pipelines_for_project(new_name, manager)

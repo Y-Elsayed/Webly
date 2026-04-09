@@ -35,7 +35,8 @@ def render_run_tab(current_project: str, cfg: dict, manager):
 
     if start_clicked:
         rebuild_pipelines_for_project(current_project, manager)
-        if st.session_state.ingest_pipeline is None:
+        runtime = st.session_state.get("runtime")
+        if runtime is None or runtime.ingest_pipeline is None:
             st.warning(
                 "Pipeline build failed. Add an OpenAI API key for chat/OpenAI features, "
                 "or use a non-OpenAI embedding model for local indexing."
@@ -51,10 +52,10 @@ def render_run_tab(current_project: str, cfg: dict, manager):
             else:
                 status.caption(f"Indexing {current}: {url}")
 
-        st.session_state.ingest_pipeline.progress_callback = _progress_cb
+        runtime.ingest_pipeline.progress_callback = _progress_cb
         with st.spinner(f"Running: {action} for {current_project}..."):
             try:
-                result = st.session_state.ingest_pipeline.run(force_crawl=force_crawl, mode=mode_val)
+                result = runtime.run_ingest(force_crawl=force_crawl, mode=mode_val)
 
                 if isinstance(result, dict) and result.get("empty_results"):
                     st.warning(
@@ -88,11 +89,12 @@ def render_run_tab(current_project: str, cfg: dict, manager):
                 manager.delete_project(current_project)
                 st.session_state.confirm_delete = None
                 st.session_state.active_project = None
+                st.session_state.runtime = None
                 st.session_state.ingest_pipeline = None
                 st.session_state.query_pipeline = None
                 st.session_state.chat_payload = {
                     "title": None,
-                    "settings": {"score_threshold": 0.5},
+                    "settings": {"score_threshold": 0.5, "memory_reset_at": 0},
                     "messages": [],
                 }
                 st.session_state.active_chat = None

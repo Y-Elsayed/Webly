@@ -3,17 +3,7 @@ from typing import List, Optional
 
 from dotenv import load_dotenv
 
-from webly.config_validator import validate_pipeline_config
-from webly.observability.cost_tracker import CostTracker
-from webly.webcreeper.creeper_core.utils import configure_logging
-
-from webly.chatbot.chatgpt_model import ChatGPTModel
-from webly.chatbot.prompts.system_prompts import apply_mode_flags, get_system_prompt
-from webly.chatbot.webly_chat_agent import WeblyChatAgent
-from webly.crawl.crawler import Crawler
-from webly.pipeline.ingest_pipeline import IngestPipeline
-from webly.pipeline.query_pipeline import QueryPipeline
-from webly.vector_index.faiss_db import FaissDatabase
+from webly.runtime import build_runtime
 
 try:
     from typing import Required, TypedDict
@@ -139,105 +129,6 @@ except ImportError:
 
 
 def build_pipelines(config: "PipelineConfig", api_key: Optional[str] = None):
-    configure_logging("webly")
     load_dotenv()
-    api_key = api_key or os.getenv("OPENAI_API_KEY")
-
-    emb = (config.get("embedding_model") or "").strip()
-    if emb.lower() in ("", "default"):
-        emb = "openai:text-embedding-3-small"
-        config["embedding_model"] = emb
-
-    chat = (config.get("chat_model") or "").strip()
-    if chat.lower() in ("", "default"):
-        chat = "gpt-4o-mini"
-        config["chat_model"] = chat
-
-    validate_pipeline_config(config)
-
-    tracker = CostTracker(output_dir=config.get("output_dir"))
-
-    uses_openai_embedder = emb.startswith("openai:")
-    uses_summary = bool(config.get("summary_model"))
-
-    if uses_openai_embedder:
-        if not api_key:
-            raise RuntimeError("Missing OPENAI_API_KEY (required for OpenAI embeddings).")
-        from webly.embedder.openai_embedder import OpenAIEmbedder
-
-        embedder = OpenAIEmbedder(
-            model_name=emb.split(":", 1)[1],
-            api_key=api_key,
-            cache_dir=config.get("embedding_cache_dir"),
-            cost_tracker=tracker,
-        )
-    else:
-        from webly.embedder.hf_sentence_embedder import HFSentenceEmbedder
-
-        embedder = HFSentenceEmbedder(emb)
-
-    db = FaissDatabase()
-    chatbot = None
-    if api_key:
-        chatbot = ChatGPTModel(api_key=api_key, model=config.get("chat_model", "gpt-4o-mini"), cost_tracker=tracker)
-
-    summarizer = None
-    if uses_summary:
-        if not api_key:
-            raise RuntimeError("Missing OPENAI_API_KEY (required for summarization).")
-        from webly.processors.text_summarizer import TextSummarizer
-
-        summary_llm = ChatGPTModel(api_key=api_key, model=config["summary_model"])
-        summarizer = TextSummarizer(
-            llm=summary_llm,
-            prompt_template="Summarize the following webpage clearly:\n\n{text}",
-        )
-
-    crawler = Crawler(
-        start_url=config["start_url"],
-        allowed_domains=config.get("allowed_domains", []),
-        output_dir=config["output_dir"],
-        results_filename=config.get("results_file", "results.jsonl"),
-        default_settings={
-            "crawl_entire_website": config.get("crawl_entire_site", True),
-            "max_depth": int(config.get("max_depth", 3)),
-            "allowed_paths": config.get("allowed_paths", []),
-            "blocked_paths": config.get("blocked_paths", []),
-            "allow_url_patterns": config.get("allow_url_patterns", []),
-            "block_url_patterns": config.get("block_url_patterns", []),
-            "allow_subdomains": bool(config.get("allow_subdomains", False)),
-            "respect_robots": bool(config.get("respect_robots", True)),
-            "rate_limit_delay": float(config.get("rate_limit_delay", 0.2)),
-            "seed_urls": config.get("seed_urls", []),
-        },
-    )
-
-    ingest_pipeline = IngestPipeline(
-        crawler=crawler,
-        index_path=config["index_dir"],
-        embedder=embedder,
-        db=db,
-        summarizer=summarizer,
-        use_summary=bool(summarizer),
-        debug=bool(config.get("debug", False)),
-    )
-    ingest_pipeline.cost_tracker = tracker
-
-    query_pipeline = None
-    if chatbot is not None:
-        mode = str(config.get("answering_mode", "technical_grounded"))
-        custom_text = config.get("system_prompt") or ""
-        custom_override = bool(config.get("system_prompt_custom_override", False))
-        allow_generated_examples = bool(config.get("allow_generated_examples", False))
-        configured_system_prompt = get_system_prompt(mode, custom_text, custom_override)
-        configured_system_prompt = apply_mode_flags(mode, configured_system_prompt, allow_generated_examples)
-        agent = WeblyChatAgent(embedder, db, chatbot, system_prompt=configured_system_prompt)
-        query_pipeline = QueryPipeline(
-            chat_agent=agent,
-            debug=bool(config.get("query_debug", False)),
-            allow_best_effort=True,
-            retrieval_mode=str(config.get("retrieval_mode", "builder")),
-            builder_max_rounds=int(config.get("builder_max_rounds", 1)),
-        )
-
-    return ingest_pipeline, query_pipeline
+    runtime = build_runtime(config, api_key=api_key or os.getenv("OPENAI_API_KEY"))
+    return runtime.ingest_pipeline, runtime.query_pipeline

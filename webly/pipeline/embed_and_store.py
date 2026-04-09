@@ -1,10 +1,10 @@
 import json
 import logging
 import os
-import re
 from typing import Any, Dict, List
 
 from webly.embedder.base_embedder import Embedder
+from webly.pipeline.embedding_text import chunk_text_for_embedding, count_tokens, hard_char_splits, max_input_tokens
 from webly.vector_index.vector_db import VectorDatabase
 
 
@@ -106,79 +106,13 @@ class EmbedAndStorePipeline:
 
     # --- token-safe embedding helpers ---
     def _max_input_tokens(self) -> int:
-        # Try to read from embedder if available; otherwise default 8192
-        for attr in ("max_input_tokens", "max_tokens", "context_size", "max_seq_len"):
-            v = getattr(self.embedder, attr, None)
-            if isinstance(v, int) and v > 0:
-                return v
-        return 8192
+        return max_input_tokens(self.embedder)
 
     def _count_tokens(self, text: str) -> int:
-        # Prefer an embedder-provided counter if present
-        if hasattr(self.embedder, "count_tokens"):
-            try:
-                return int(self.embedder.count_tokens(text))
-            except Exception as e:
-                self.logger.debug(f"embedder.count_tokens failed, using char-count heuristic: {e}")
-        # Heuristic: ~4 chars per token
-        return max(1, len(text) // 4)
+        return count_tokens(self.embedder, text, self.logger)
 
     def _hard_char_splits(self, text: str, max_tokens: int) -> list[str]:
-        # Fall back to char-based slicing if a single sentence/para still too big
-        # Convert token budget to rough char budget (x4), keep a minimum step
-        char_budget = max(800, max_tokens * 4)
-        out, i, n = [], 0, len(text)
-        while i < n:
-            out.append(text[i : min(n, i + char_budget)])
-            i += char_budget
-        return out
+        return hard_char_splits(text, max_tokens)
 
     def _chunk_for_embedding(self, text: str, safety_ratio: float = 0.9) -> list[str]:
-        """Split text into <= max_tokens chunks, preferring paragraph/sentence boundaries."""
-        max_tok = int(self._max_input_tokens() * safety_ratio)
-        if self._count_tokens(text) <= max_tok:
-            return [text]
-
-        # 1) by blank lines (paragraphs)
-        paras = re.split(r"\n{2,}", text)
-        chunks, cur, cur_toks = [], [], 0
-
-        def flush():
-            nonlocal chunks, cur, cur_toks
-            if cur:
-                joined = "\n\n".join(cur).strip()
-                if joined:
-                    chunks.append(joined)
-            cur, cur_toks = [], 0
-
-        for p in paras:
-            ptok = self._count_tokens(p)
-            if ptok > max_tok:
-                # 2) split paragraph by sentences
-                sents = re.split(r"(?<=[.!?])\s+", p)
-                for s in sents:
-                    stok = self._count_tokens(s)
-                    if stok > max_tok:
-                        # 3) last resort: hard splits by chars
-                        for piece in self._hard_char_splits(s, max_tok):
-                            if self._count_tokens(piece) > max_tok:
-                                # extremely rare; but we still push as-is to avoid loops
-                                chunks.append(piece)
-                            else:
-                                if cur_toks + self._count_tokens(piece) > max_tok:
-                                    flush()
-                                cur.append(piece)
-                                cur_toks += self._count_tokens(piece)
-                        continue
-                    if cur_toks + stok > max_tok:
-                        flush()
-                    cur.append(s)
-                    cur_toks += stok
-                flush()
-            else:
-                if cur_toks + ptok > max_tok:
-                    flush()
-                cur.append(p)
-                cur_toks += ptok
-        flush()
-        return [c for c in chunks if c]
+        return chunk_text_for_embedding(self.embedder, text, self.logger, safety_ratio=safety_ratio)

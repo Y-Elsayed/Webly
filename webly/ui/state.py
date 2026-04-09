@@ -16,9 +16,10 @@ EMBEDDER_OPTIONS = {
 def _init_state():
     defaults = {
         "active_project": None,
+        "runtime": None,
         "ingest_pipeline": None,
         "query_pipeline": None,
-        "chat_payload": {"title": None, "settings": {"score_threshold": 0.5}, "messages": []},
+        "chat_payload": {"title": None, "settings": {"score_threshold": 0.5, "memory_reset_at": 0}, "messages": []},
         "active_chat": None,
         "show_new_project_form": False,
         "rename_chat_open": None,

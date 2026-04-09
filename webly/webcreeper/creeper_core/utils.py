@@ -45,13 +45,16 @@ def configure_logging(
             else Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
         )
 
-        file_handler = FileHandler(log_file)
-        file_handler.setFormatter(
-            Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        )
-
         logger.addHandler(stream_handler)
-        logger.addHandler(file_handler)
+        try:
+            file_handler = FileHandler(log_file)
+        except OSError:
+            file_handler = None
+        if file_handler is not None:
+            file_handler.setFormatter(
+                Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+            )
+            logger.addHandler(file_handler)
 
     logger.setLevel(level)
     return logger
