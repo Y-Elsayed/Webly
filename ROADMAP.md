@@ -15,6 +15,7 @@ This roadmap is organized by Webly components and split into:
 - Retrieval mode controls in UI (`builder` / `classic`)
 - Memory window control (`leave_last_k`) and builder rounds setting in UI
 - UI modules split under `webly/ui/` with runtime-backed project rebuild flow
+- Typed config/runtime bootstrap separated from Streamlit-specific state
 
 ### Next
 - Improve overall UI quality (layout consistency, clarity of actions/states, better empty/error states)
@@ -25,26 +26,28 @@ This roadmap is organized by Webly components and split into:
 - Improve error messages for crawl policy misconfiguration
 
 ### Later
-- Split the large `app.py` script into modular UI components
-  (`ui/projects.py`, `ui/run.py`, `ui/chat.py`, `ui/settings.py`, shared state/helpers)
 - Multi-user auth and project sharing
 
 ## API Service Layer (non-UI usage)
 ### Done
 - Core pipelines are importable and callable from Python modules
 - Typed runtime/config bootstrap (`ProjectConfig`, `ProjectRuntime`, `build_runtime`)
+- Local FastAPI service package under `webly/service/`
+- Project CRUD endpoints
+- Query endpoint returning structured results (`answer`, `supported`, `sources`, `trace`)
+- Lightweight project status endpoint
+- Synchronous ingest endpoint
+- Chat persistence endpoints backed by the existing filesystem repository layer
 
 ### Next
-- Add a lightweight FastAPI service exposing core operations:
-  - `POST /projects`
-  - `POST /projects/{id}/crawl`
-  - `POST /projects/{id}/index`
-  - `POST /projects/{id}/query`
-  - `GET /projects/{id}/status`
+- Global exception normalization and consistent error payloads
+- Better service docs and OpenAPI examples
+- Optional in-memory job registry if ingest should stop blocking request threads
 
 ### Later
 - Async/background jobs for long-running crawl/index tasks
 - Auth/rate limiting for hosted API mode
+- Streaming query responses
 
 ## Crawling (`webcreeper/`, `crawl/`)
 ### Done
@@ -52,6 +55,7 @@ This roadmap is organized by Webly components and split into:
 - Robots toggle and rate-limiting support
 - Link graph generation (`graph.json`)
 - Crawl output persistence (`results.jsonl`)
+- Crawler adapter now retains Atlas state for diagnostics/report access
 
 ### Next
 - Better URL canonicalization edge cases
@@ -69,11 +73,12 @@ This roadmap is organized by Webly components and split into:
 - Optional summarization path
 - Segment-safe embedding preparation
 - Ingest orchestration for crawl/index modes
+- Shared embedding text segmentation reused across ingest codepaths
 
 ### Next
-- Config schema validation with defaults and better error surfacing
 - Stronger chunk metadata consistency and docs
 - Expand ingest tests for edge conditions
+- Continue decomposing `IngestPipeline` into smaller collaborators
 
 ### Later
 - Pluggable extractors (additional parser backends)
@@ -89,9 +94,10 @@ This roadmap is organized by Webly components and split into:
 - Builder retrieval mode with LLM-driven concept extraction and follow-up planning
 - Initial query routing modes (`transform_only`, `retrieve_followup`, `retrieve_new`)
 - Best-effort responses with concept-oriented "Read more" links
+- Typed query results plus explicit sources/trace for reuse outside Streamlit
+- Configured `score_threshold` now applies to vector retrieval
 
 ### Next
-- Split retrieval into typed query results plus explicit sources/trace for service-layer reuse
 - Improve query understanding so retrieval can better parse user intent and reformulate searches
 - Add stronger reasoning-aware retrieval steps for ambiguous or multi-part questions
 - Improve route-decision quality so standalone questions are less likely to be treated as follow-ups
@@ -99,6 +105,7 @@ This roadmap is organized by Webly components and split into:
 - Source citation quality improvements
 - Query evaluation harness (gold questions + metrics)
 - Retrieval cache for repeated queries
+- Decompose the current `QueryPipeline` god class into smaller retrieval/context components
 
 ### Later
 - Cross-encoder reranking
@@ -109,6 +116,7 @@ This roadmap is organized by Webly components and split into:
 - OpenAI-focused API-backed embedding/chat integration
 - FAISS backend with metadata persistence
 - Deterministic ID behavior for stored records
+- Runtime/service-level index readiness checks
 
 ### Next
 - Explicit migration/version metadata for index files
@@ -126,6 +134,7 @@ This roadmap is organized by Webly components and split into:
 ### Done
 - Per-project config storage
 - Per-chat persisted history payloads
+- Repository-backed project/chat persistence layer
 - Project folder conventions for results/index/chats
 - BOM-safe JSON reads/writes for project config and chat files
 
@@ -156,6 +165,7 @@ This roadmap is organized by Webly components and split into:
 ## Documentation and Adoption
 ### Done
 - Core README with quick-start and development commands
+- API service documentation with endpoint examples
 
 ### Next
 - Improve documentation depth for both developers and non-technical users

@@ -55,6 +55,10 @@ hf = [
 ui = [
     "streamlit>=1.45.1",
 ]
+api = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+]
 # Development tools
 dev = [
     "pytest>=8.3.2",
@@ -71,6 +75,8 @@ all = [
     "tokenizers>=0.19.1",
     "safetensors>=0.4.3",
     "streamlit>=1.45.1",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
 ]
 
 [project.urls]
