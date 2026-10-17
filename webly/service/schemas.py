@@ -170,6 +170,9 @@ class QueryResponse(BaseModel):
     supported: bool
     sources: list[SourceRefResponse] = Field(default_factory=list)
     trace: dict[str, Any] = Field(default_factory=dict)
+    citations: list[dict[str, str]] = Field(default_factory=list)
+    status: str = "unsupported"
+    missing_information: list[str] = Field(default_factory=list)
 
 
 class IngestRequest(BaseModel):

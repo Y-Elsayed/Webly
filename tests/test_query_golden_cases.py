@@ -59,17 +59,19 @@ def test_golden_classic_rewrite_rescues_missing_initial_context():
         enable_graph_expansion=False,
         enable_section_expansion=False,
         rewrite_fn=lambda _question, _hints: "retry policy details",
-        answer_fn=lambda _question, _context: "Retries use exponential backoff with jitter and stop after five attempts.",
+        answer_fn=lambda _question, _context: (
+            "Retries use exponential backoff with jitter and stop after five attempts."
+        ),
         judge_fn=lambda _question, context: "exponential backoff with jitter" in context.lower(),
     )
 
     assert result.supported is True
     assert result.trace["answer_path"] == "answerable_hop_1"
     assert result.trace["combined_result_count"] >= 2
-    assert [source.url for source in result.sources] == [
+    assert {source.url for source in result.sources} == {
         "https://docs.example.com/retries",
         "https://docs.example.com/intro",
-    ]
+    }
 
 
 def test_golden_builder_transform_only_uses_memory_not_retrieval():
@@ -85,7 +87,8 @@ def test_golden_builder_transform_only_uses_memory_not_retrieval():
         enable_hybrid=False,
     )
 
-    assert result.supported is True
+    assert result.supported is False
+    assert result.status == "unverified_transformation"
     assert result.sources == []
     assert result.answer == "- Crawls websites\n- Builds retrieval-ready knowledge"
     assert result.trace["route_mode"] == "transform_only"

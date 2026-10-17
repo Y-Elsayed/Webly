@@ -18,11 +18,13 @@ class WeblyChatAgent:
         top_k: int = 5,
         prompt_template: Optional[str] = None,
         system_prompt: Optional[str] = None,
+        max_total_tokens: int = 16000,
     ):
         self.embedder = embedder
         self.vector_db = vector_db
         self.chatbot = chatbot
         self.top_k = top_k
+        self.max_total_tokens = max_total_tokens
 
         default_system_prompt = self._load_default_system_prompt()
         self.system_prompt = system_prompt or default_system_prompt
@@ -65,6 +67,68 @@ class WeblyChatAgent:
         if response == "N":
             return "I'm sorry, I couldn't find any relevant information to answer that question."
         return response
+
+    def answer_grounded(
+        self, question: str, context: str, sources: list[dict]
+    ) -> tuple[str, list[dict], str, list[str]]:
+        """Generate and validate provenance. Semantic support still needs human review."""
+        allowed = {str(source["chunk_id"]): source for source in sources}
+        if not context or not allowed:
+            return "I couldn't find enough approved evidence to answer that.", [], "unsupported", []
+        prompt = (
+            f"{self.system_prompt.strip()}\n\n"
+            f"{self.prompt_template.format(context=context, question=question)}\n\n"
+            "Return JSON only: {\"answer\":\"...\",\"status\":\"answered|partially_answered|unsupported\","
+            "\"citations\":[{\"segment_id\":\"...\",\"supporting_span\":\"exact excerpt\"}],"
+            "\"missing_information\":[\"...\"]}. "
+            "Cite only Evidence IDs above. Copy a nonempty exact supporting span from that evidence. "
+            "If support is missing, use unsupported and no factual claim."
+        )
+        # Byte count is a conservative upper bound for BPE tokens and needs no
+        # tokenizer download on a fresh offline developer installation.
+        prompt_tokens = len(prompt.encode("utf-8")) + 32
+        window = int(getattr(self.chatbot, "context_window_tokens", 0) or 0)
+        output_reserve = max(512, min(2048, window // 8)) if window else 2048
+        if prompt_tokens + output_reserve > min(window or self.max_total_tokens, self.max_total_tokens):
+            return "I couldn't fit the evidence within the model budget.", [], "unsupported", []
+        for attempt in range(2):
+            raw = self.chatbot.generate(prompt)
+            try:
+                data = json.loads(raw)
+                answer = data["answer"]
+                status = data["status"]
+                citations = data["citations"]
+                missing = data.get("missing_information", [])
+                if not isinstance(answer, str) or not answer.strip() or status not in {
+                    "answered", "partially_answered", "unsupported"
+                } or not isinstance(citations, list) or not isinstance(missing, list) or any(
+                    not isinstance(item, str) for item in missing
+                ):
+                    raise ValueError("Invalid answer schema")
+                verified = []
+                for citation in citations:
+                    sid = citation["segment_id"]
+                    span = citation["supporting_span"]
+                    if (
+                        sid not in allowed or not isinstance(span, str) or not span.strip()
+                        or span not in context or span not in allowed[sid].get("original_text", "")
+                    ):
+                        raise ValueError("Citation is not in supplied evidence")
+                    verified.append({"segment_id": sid, "page_url": allowed[sid]["url"], "supporting_span": span})
+                if status != "unsupported" and not verified:
+                    raise ValueError("Factual answer has no citation")
+                if status == "partially_answered" and not missing:
+                    raise ValueError("Partial answer must name missing information")
+                if status == "unsupported":
+                    return "I couldn't verify a supported answer from the available evidence.", [], status, missing
+                return answer.strip(), verified, status, missing
+            except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+                if attempt == 0:
+                    prompt += (
+                        "\nPrevious output failed schema/citation validation. "
+                        "Repair once using only listed evidence."
+                    )
+        return "I couldn't verify a supported answer from the available evidence.", [], "unsupported", []
 
     def answer_with_support(self, question: str, context: str) -> Tuple[str, str]:
         """

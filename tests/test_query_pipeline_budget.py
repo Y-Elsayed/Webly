@@ -15,15 +15,15 @@ class _DummyChatAgent:
         self.vector_db = None
 
 
-def test_budget_scales_with_large_model_context_window():
+def test_budget_never_exceeds_product_limit_with_large_model():
     agent = _DummyChatAgent(_DummyChatbot("gpt-4o-mini", 128000))
     qp = QueryPipeline(chat_agent=agent, max_context_chars=12000)
     budget = qp._compute_budget_chars("question")
-    assert budget > 12000
+    assert budget == 12000
 
 
 def test_budget_respects_small_context_window():
     agent = _DummyChatAgent(_DummyChatbot("gpt-3.5-turbo", 16000))
     qp = QueryPipeline(chat_agent=agent, max_context_chars=12000)
     budget = qp._compute_budget_chars("question")
-    assert budget == 54400
+    assert budget == 12000

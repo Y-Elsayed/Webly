@@ -1,10 +1,11 @@
 ﻿import logging
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from webly.chatbot.context_builder_agent import ContextBuilderAgent
 from webly.pipeline.query_context import QueryContextTools
-from webly.pipeline.query_retriever import QueryRetriever
 from webly.pipeline.query_response_composer import QueryResponseComposer
+from webly.pipeline.query_retriever import QueryRetriever
 from webly.query_result import QueryResult, SourceRef
 
 
@@ -65,6 +66,15 @@ class QueryPipeline:
         self.score_threshold = max(0.0, float(score_threshold or 0.0))
         self.context_builder = ContextBuilderAgent(planner_llm=getattr(self.chat_agent, "chatbot", None))
         self.logger = logging.getLogger(self.__class__.__name__)
+        self.capabilities = {
+            "hybrid": enable_hybrid,
+            "graph_expansion": retrieval_mode.lower() == "classic" and enable_graph_expansion,
+            "section_expansion": retrieval_mode.lower() == "classic" and enable_section_expansion,
+        }
+        if retrieval_mode.lower() == "builder" and (enable_graph_expansion or enable_section_expansion):
+            self.logger.warning(
+                "Builder mode does not execute graph/section expansion; capabilities report them disabled"
+            )
 
         self.retriever = QueryRetriever(
             chat_agent=self.chat_agent,
@@ -83,6 +93,10 @@ class QueryPipeline:
         self._last_used_sources: List[Dict[str, str]] = []
         self._last_supported: bool = False
         self._last_trace: Dict[str, Any] = {}
+        self._last_citations: List[Dict[str, str]] = []
+        self._last_evidence_records: Dict[str, Dict[str, Any]] = {}
+        self._last_status: str | None = None
+        self._last_missing_information: List[str] = []
 
     # ---------------- Core entrypoint ----------------
     def query(self, question: str, retry_on_empty: bool = False, memory_context: str = "") -> str:
@@ -92,6 +106,10 @@ class QueryPipeline:
         self._last_supported = False
         self._last_trace = {}
         self._last_used_sources = []
+        self._last_citations = []
+        self._last_evidence_records = {}
+        self._last_status = None
+        self._last_missing_information = []
         if (self.retrieval_mode or "classic").lower() == "builder":
             return self._query_builder(question, retry_on_empty=retry_on_empty, memory_context=memory_context)
 
@@ -156,8 +174,7 @@ class QueryPipeline:
         # If we can already answer, do it
         if self.enable_answerability_check and self.chat_agent._judge_answerability(question_for_answer, context):
             return self._finalize_result(
-                self.chat_agent.answer(question_for_answer, context),
-                True,
+                *self._answer_for_context(question_for_answer, context),
                 {
                     "mode": "classic",
                     "query": question,
@@ -172,6 +189,7 @@ class QueryPipeline:
         # We'll run up to 2 iterative hops (total 3 attempts counting initial)
         max_hops = 2
         tried_queries: List[str] = [question]
+        rewrite_searches = 0
 
         for hop in range(1, max_hops + 1):
             if not self.enable_rewrite:
@@ -193,8 +211,11 @@ class QueryPipeline:
 
             # Run second-pass searches for each subquery
             hop_results: List[Dict[str, Any]] = []
-            for q in subqueries:
+            for q in subqueries[: max(0, 3 - rewrite_searches)]:
                 hop_results.extend(self._search(q, self.top_k_second_pass, tag="rewrite"))
+                rewrite_searches += 1
+            if not hop_results:
+                break
 
             if self.debug and hop_results:
                 self.logger.debug(f"Hop {hop} rewritten results: {[r.get('id') for r in hop_results]}")
@@ -220,8 +241,7 @@ class QueryPipeline:
 
             if self.enable_answerability_check and self.chat_agent._judge_answerability(question_for_answer, context):
                 return self._finalize_result(
-                    self.chat_agent.answer(question_for_answer, context),
-                    True,
+                    *self._answer_for_context(question_for_answer, context),
                     {
                         "mode": "classic",
                         "query": question,
@@ -233,12 +253,21 @@ class QueryPipeline:
                 )
 
             tried_queries.extend(subqueries)
+            if rewrite_searches >= 3:
+                break
 
         # If we still can't answer confidently, return a natural fallback with helpful links
         if self.allow_best_effort and combined:
+            answer, supported = self._best_effort_payload(
+                question_for_answer=question_for_answer,
+                context=context,
+                concepts=[],
+                coverage={"missing": [], "covered": []},
+                results=combined,
+            )
             return self._finalize_result(
-                self.chat_agent.answer(question_for_answer, context),
-                False,
+                answer,
+                supported,
                 {
                     "mode": "classic",
                     "query": question,
@@ -263,6 +292,7 @@ class QueryPipeline:
         )
 
     def _query_builder(self, question: str, retry_on_empty: bool = False, memory_context: str = "") -> QueryResult:
+        deadline = time.monotonic() + 30.0
         if self.debug:
             self.logger.debug(f"[builder] User query: {question}")
             if memory_context:
@@ -300,9 +330,12 @@ class QueryPipeline:
             )
             transformed = (self.chat_agent.chatbot.generate(prompt) or "").strip()
             if transformed:
+                # Conversation memory is not source evidence. Preserve this
+                # local editing workflow, but never classify it as grounded.
+                self._last_status = "unverified_transformation"
                 return self._finalize_result(
                     transformed,
-                    True,
+                    False,
                     {
                         "mode": "builder",
                         "route_mode": route_mode,
@@ -370,6 +403,8 @@ class QueryPipeline:
 
         # Minimal builder loop: request targeted searches only for missing concepts.
         coverage = self.context_builder.coverage_report(concepts, saved_results)
+        followup_searches = 0
+        searched = {question_for_search}
         for i in range(self.builder_max_rounds):
             coverage = self.context_builder.coverage_report(concepts, saved_results)
             missing = coverage.get("missing") or []
@@ -378,9 +413,18 @@ class QueryPipeline:
                     f"[builder] Round {i + 1} coverage: covered={coverage.get('covered')} missing={missing}"
                 )
             if not missing:
-                break
+                probe_context = self._assemble_context(
+                    self._combine_and_rerank(saved_results)[: self.max_results_to_consider],
+                    max_chars=self._compute_budget_chars(question),
+                )
+                if self.chat_agent._judge_answerability(question_for_answer, probe_context):
+                    break
+                # Literal concept occurrence is only a search hint, not proof
+                # that evidence supports the question (including negation).
+                missing = concepts or [question_for_search]
             decision = self.context_builder.decide_followups(question_for_search, missing, saved_results)
-            drop_ids = set(decision.get("drop_chunk_ids") or [])
+            known_ids = {str(r.get("segment_id") or r.get("id")) for r in saved_results}
+            drop_ids = set(decision.get("drop_chunk_ids") or []) & known_ids
             if drop_ids:
                 saved_results = [
                     r
@@ -395,8 +439,14 @@ class QueryPipeline:
                 )
             if not extra_queries:
                 break
-            for q in extra_queries:
+            for q in list(dict.fromkeys(extra_queries)):
+                if followup_searches >= 3 or q in searched:
+                    continue
+                if time.monotonic() >= deadline:
+                    break
                 saved_results.extend(self._search(q, self.top_k_second_pass, tag="builder-followup"))
+                searched.add(q)
+                followup_searches += 1
 
         combined = self._combine_and_rerank(saved_results)[: self.max_results_to_consider]
         context = self._assemble_context(combined, max_chars=self._compute_budget_chars(question))
@@ -410,8 +460,7 @@ class QueryPipeline:
 
         if self.enable_answerability_check and self.chat_agent._judge_answerability(question_for_answer, context):
             return self._finalize_result(
-                self.chat_agent.answer(question_for_answer, context),
-                True,
+                *self._answer_for_context(question_for_answer, context),
                 {
                     "mode": "builder",
                     "route_mode": route_mode,
@@ -468,7 +517,26 @@ class QueryPipeline:
             supported=self._last_supported,
             sources=self._current_sources(),
             trace=dict(self._last_trace),
+            citations=list(self._last_citations),
+            status=self._last_status or ("answered" if supported else "unsupported"),
+            missing_information=list(self._last_missing_information),
         )
+
+    def _answer_for_context(self, question: str, context: str) -> Tuple[str, bool]:
+        if hasattr(self.chat_agent, "answer_grounded"):
+            sources = [
+                {
+                    **source,
+                    "original_text": self._last_evidence_records.get(source["chunk_id"], {}).get("original_text", ""),
+                }
+                for source in self._last_used_sources
+            ]
+            answer, citations, status, missing = self.chat_agent.answer_grounded(question, context, sources)
+            self._last_citations = citations
+            self._last_status = status
+            self._last_missing_information = missing
+            return answer, status in {"answered", "partially_answered"}
+        return self.chat_agent.answer(question, context), True
 
     def _current_sources(self) -> List[SourceRef]:
         return self.context_tools.current_sources(self._last_used_sources)
@@ -488,78 +556,6 @@ class QueryPipeline:
     def _combine_and_rerank(self, *result_groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         return self.retriever.combine_and_rerank(*result_groups)
 
-        groups: List[List[Dict[str, Any]]] = []
-        if len(result_groups) == 1 and isinstance(result_groups[0], list):
-            # single list possibly passed in
-            groups = [result_groups[0]]
-        else:
-            groups = list(result_groups)
-
-        by_id: Dict[str, Dict[str, Any]] = {}
-        for group in groups:
-            for r in group:
-                rid = r.get("id") or f"{r.get('url','')}#chunk_{r.get('chunk_index',-1)}"
-                if rid in by_id:
-                    prev = by_id[rid]
-                    if (r.get("score") or -math.inf) > (prev.get("score") or -math.inf):
-                        by_id[rid] = r
-                    else:
-                        prev.setdefault("_boost_reason", r.get("_boost_reason"))
-                        prev.setdefault("_origin", r.get("_origin"))
-                        prev.setdefault("_meta_rank", r.get("_meta_rank"))
-                else:
-                    by_id[rid] = r
-
-        combined = list(by_id.values())
-
-        def rank_key(r: Dict[str, Any]) -> Tuple:
-            vec = float(r.get("_score_vec") or r.get("score") or 0.0)
-            bm25 = float(r.get("_score_bm25") or 0.0)
-            # Hybrid score: weighted sum (vector dominates, BM25 helps recall)
-            score = (0.75 * vec) + (0.25 * bm25)
-            boost = 0.0
-            if r.get("_boost_reason") == "anchor":
-                boost += self.anchor_boost
-            if r.get("_boost_reason") == "section":
-                boost += self.section_boost
-
-            origin_pri = {
-                "initial": 3,
-                "initial-after-recrawl": 3,
-                "rewrite": 2,
-                "graph-anchor": 1,
-                "section": 1,
-            }.get(r.get("_origin", ""), 0)
-            meta_rank = r.get("_meta_rank", 9999)
-            return (score + boost, origin_pri, -meta_rank)
-
-        combined.sort(key=rank_key, reverse=True)
-        max_per_parent = 2  # allow up to 2 segments from the same page; tune 1â€“3
-        by_parent = {}
-        parent_limited = []
-        for r in combined:
-            meta = r.get("metadata") or {}
-            parent = meta.get("chunk_id") or meta.get("parent_id") or (r.get("url") or r.get("source") or "")
-            cnt = by_parent.get(parent, 0)
-            if cnt >= max_per_parent:
-                continue
-            by_parent[parent] = cnt + 1
-            parent_limited.append(r)
-
-        # --- Stage B: cap per canonical URL (collapse ?page=1/2, utm_* etc.)
-        max_per_canon = 1  # usually 1 is ideal; set 2 if pagination genuinely differs
-        seen_canon = {}
-        canon_limited = []
-        for r in parent_limited:
-            canon = self._normalize_for_dedupe(r.get("url") or r.get("source") or "")
-            cnt = seen_canon.get(canon, 0)
-            if cnt >= max_per_canon:
-                continue
-            seen_canon[canon] = cnt + 1
-            canon_limited.append(r)
-
-        return canon_limited
-
     # ---------------- Hybrid retrieval (BM25) ----------------
     def _tokenize(self, text: str) -> List[str]:
         return self.retriever._tokenize(text)
@@ -577,6 +573,12 @@ class QueryPipeline:
     def _assemble_context(self, results: List[Dict[str, Any]], max_chars: int) -> str:
         context, used_sources = self.context_tools.assemble_context(results, max_chars=max_chars)
         self._last_used_sources = used_sources
+        self._last_evidence_records = {
+            str(record.get("segment_id") or record.get("id")): {
+                "original_text": record.get("original_text") or record.get("text") or ""
+            }
+            for record in results
+        }
         return context
 
     def _compute_budget_chars(self, question: str) -> int:
@@ -603,6 +605,8 @@ class QueryPipeline:
         results: List[Dict[str, Any]],
     ) -> Tuple[str, bool]:
         _ = concepts, results
+        if hasattr(self.chat_agent, "answer_grounded"):
+            return self._answer_for_context(question_for_answer, context)
         return self.response_composer.best_effort_payload(
             question_for_answer=question_for_answer,
             context=context,

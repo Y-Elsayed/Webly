@@ -45,7 +45,7 @@ def test_query_retriever_filters_low_similarity_results():
     assert results[0]["_origin"] == "initial"
 
 
-def test_query_retriever_combines_and_dedupes_by_canonical_url():
+def test_query_retriever_keeps_distinct_segments_on_same_canonical_url():
     retriever = QueryRetriever(
         chat_agent=_DummyChatAgent([]),
         logger=_DummyLogger(),
@@ -75,5 +75,4 @@ def test_query_retriever_combines_and_dedupes_by_canonical_url():
         ]
     )
 
-    assert len(results) == 1
-    assert results[0]["id"] == "a"
+    assert {result["segment_id"] for result in results} == {"a", "b"}

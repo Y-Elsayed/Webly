@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from collections import defaultdict
 from typing import Any, Dict, List, Tuple
 
 from webly.query_result import SourceRef
@@ -14,7 +13,7 @@ class QueryContextTools:
         *,
         max_chars: int,
     ) -> Tuple[str, List[Dict[str, str]]]:
-        section_groups: Dict[str, List[str]] = defaultdict(list)
+        blocks: List[str] = []
         seen_ids = set()
         total = 0
         used_sources: List[Dict[str, str]] = []
@@ -25,34 +24,26 @@ class QueryContextTools:
                 continue
             seen_ids.add(uid)
 
-            text = (record.get("text") or "").strip()
+            text = (record.get("original_text") or record.get("text") or "").strip()
             if not text:
                 continue
 
             url = record.get("url") or record.get("source", "N/A")
             subheadings = " > ".join(record.get("hierarchy", [])) if record.get("hierarchy") else ""
             prefix = f"[{subheadings}]\n" if subheadings else ""
-            chunk_text = f"{prefix}{text}\n\n(Source: {url})"
-
-            if total + len(chunk_text) > max_chars:
-                remaining = max(0, max_chars - total)
-                preview = chunk_text[:remaining]
-                if preview:
-                    top = (record.get("hierarchy") or ["General"])[0]
-                    section_groups[top].append(preview)
-                    total += len(preview)
-                    used_sources.append(
-                        {
-                            "chunk_id": str(uid),
-                            "url": str(url),
-                            "section": str(top),
-                        }
-                    )
+            label = f"[Evidence: {uid}] (Source: {url})\n"
+            chunk_text = f"{label}{prefix}{text}"
+            separator = "\n\n---\n\n" if blocks else ""
+            remaining = max_chars - total - len(separator)
+            if remaining <= len(label) + len(prefix):
                 break
-
+            if len(chunk_text) > remaining:
+                chunk_text = chunk_text[:remaining].rsplit(" ", 1)[0].rstrip()
+            if len(chunk_text) <= len(label) + len(prefix):
+                break
             top_level = (record.get("hierarchy") or ["General"])[0]
-            section_groups[top_level].append(chunk_text)
-            total += len(chunk_text)
+            blocks.append(chunk_text)
+            total += len(separator) + len(chunk_text)
             used_sources.append(
                 {
                     "chunk_id": str(uid),
@@ -64,26 +55,21 @@ class QueryContextTools:
             if total >= max_chars:
                 break
 
-        blocks = []
-        for section, chunks in section_groups.items():
-            full = "\n\n".join(chunks).strip()
-            if full:
-                blocks.append(full)
-        return "\n\n---\n\n".join(blocks).strip(), used_sources
+        return "\n\n---\n\n".join(blocks), used_sources
 
     def compute_budget_chars(self, chat_agent, *, max_context_chars: int) -> int:
-        base = max(max_context_chars, 8000)
+        base = max(0, max_context_chars)
         chatbot = getattr(chat_agent, "chatbot", None)
         context_window = getattr(chatbot, "context_window_tokens", None)
 
         if isinstance(context_window, int) and context_window > 0:
             reserve_tokens = max(2000, int(context_window * 0.15))
-            usable_tokens = max(2000, context_window - reserve_tokens)
-            return max(base, min(int(usable_tokens * 4), 180000))
+            usable_tokens = max(0, context_window - reserve_tokens)
+            return min(base, int(usable_tokens * 3))
 
         model_name = (getattr(chatbot, "model_name", None) or getattr(chatbot, "model", "")).lower()
         if "gpt-4o" in model_name or "4o" in model_name or "gpt-4.1" in model_name:
-            return min(int(base * 5), 100000)
+            return base
         return base
 
     def current_sources(self, used_sources: List[Dict[str, str]]) -> List[SourceRef]:

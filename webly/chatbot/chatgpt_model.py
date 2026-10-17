@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class ChatGPTModel(Chatbot):
     def __init__(self, api_key: str, model: str = "gpt-3.5-turbo", cost_tracker=None):
         """ChatGPT model wrapper using the new OpenAI client."""
-        self.client = OpenAI(api_key=api_key)
+        self.client = OpenAI(api_key=api_key, timeout=10.0, max_retries=0)
         self.model = model
         # Keep explicit attributes used by retrieval budget logic.
         self.model_name = model
@@ -34,13 +34,14 @@ class ChatGPTModel(Chatbot):
             return 16_000
         return 16_000
 
-    def generate(self, prompt: str, max_retries: int = 3, backoff: float = 1.0) -> str:
+    def generate(self, prompt: str, max_retries: int = 0, backoff: float = 1.0) -> str:
         for attempt in range(max_retries + 1):
             try:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.0,
+                    max_tokens=2048,
                 )
                 if self._cost_tracker is not None and response.usage is not None:
                     self._cost_tracker.record_chat(

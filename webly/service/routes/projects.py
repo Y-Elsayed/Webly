@@ -10,8 +10,8 @@ from webly.service.schemas import (
     ProjectPathsResponse,
     ProjectResponse,
     ProjectStatusResponse,
-    RuntimeCapabilitiesResponse,
     ProjectUpdateRequest,
+    RuntimeCapabilitiesResponse,
 )
 from webly.service.services.project_service import ProjectService
 from webly.service.services.runtime_service import RuntimeService

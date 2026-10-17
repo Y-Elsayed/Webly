@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from collections import defaultdict
 from logging import Logger
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 
@@ -50,17 +51,20 @@ class QueryRetriever:
                     if float(record.get("score") or 0.0) >= self.score_threshold
                 ]
             for i, record in enumerate(results):
-                record.setdefault("_meta_rank", i)
-                record.setdefault("_origin", tag)
-                record.setdefault("_score_vec", float(record.get("score") or 0.0))
+                record = record.copy()
+                record["_meta_rank"] = i + 1
+                record["_origin"] = tag
+                record["_channel"] = "semantic"
+                record["_score_vec"] = float(record.get("score") or 0.0)
+                results[i] = record
             all_results.extend(results)
 
             if self.enable_hybrid:
                 bm25_hits = self._bm25_search(q, top_k=max(8, k))
                 for i, record in enumerate(bm25_hits):
-                    record.setdefault("_meta_rank", i)
-                    record.setdefault("_origin", f"{tag}-bm25")
-                    record.setdefault("_score_bm25", float(record.get("_score_bm25") or 0.0))
+                    record["_meta_rank"] = i + 1
+                    record["_origin"] = f"{tag}-bm25"
+                    record["_channel"] = "lexical"
                 all_results.extend(bm25_hits)
         return all_results
 
@@ -126,70 +130,35 @@ class QueryRetriever:
         by_id: Dict[str, Dict[str, Any]] = {}
         for group in groups:
             for record in group:
-                record_id = record.get("id") or f"{record.get('url', '')}#chunk_{record.get('chunk_index', -1)}"
-                if record_id in by_id:
-                    previous = by_id[record_id]
-                    if (record.get("score") or -math.inf) > (previous.get("score") or -math.inf):
-                        by_id[record_id] = record
-                    else:
-                        previous.setdefault("_boost_reason", record.get("_boost_reason"))
-                        previous.setdefault("_origin", record.get("_origin"))
-                        previous.setdefault("_meta_rank", record.get("_meta_rank"))
+                record_id = record.get("segment_id") or record.get("id")
+                if not isinstance(record_id, str) or not record_id:
+                    continue
+                channel = record.get("_channel") or ("lexical" if record.get("_score_bm25") else "semantic")
+                origin = str(record.get("_origin") or "initial")
+                rank = max(1, int(record.get("_meta_rank", 1)))
+                entry = by_id.setdefault(
+                    record_id, {**record, "id": record_id, "segment_id": record_id, "channel_ranks": {}}
+                )
+                ranks = entry["channel_ranks"]
+                key = f"{origin}:{channel}"
+                ranks[key] = min(rank, ranks.get(key, rank))
+                if channel == "lexical":
+                    entry["_score_bm25"] = max(
+                        float(record.get("_score_bm25") or 0), float(entry.get("_score_bm25") or 0)
+                    )
                 else:
-                    by_id[record_id] = record
-
-        combined = list(by_id.values())
-
-        def rank_key(record: Dict[str, Any]) -> Tuple[float, int, int]:
-            vec = float(record.get("_score_vec") or record.get("score") or 0.0)
-            bm25 = float(record.get("_score_bm25") or 0.0)
-            score = (0.75 * vec) + (0.25 * bm25)
-            boost = 0.0
-            if record.get("_boost_reason") == "anchor":
-                boost += self.anchor_boost
-            if record.get("_boost_reason") == "section":
-                boost += self.section_boost
-
-            origin_pri = {
-                "initial": 3,
-                "initial-after-recrawl": 3,
-                "rewrite": 2,
-                "graph-anchor": 1,
-                "section": 1,
-            }.get(record.get("_origin", ""), 0)
-            meta_rank = record.get("_meta_rank", 9999)
-            return (score + boost, origin_pri, -meta_rank)
-
-        combined.sort(key=rank_key, reverse=True)
-        max_per_parent = 2
-        by_parent: Dict[str, int] = {}
-        parent_limited = []
-        for record in combined:
-            metadata = record.get("metadata") or {}
-            parent = metadata.get("chunk_id") or metadata.get("parent_id") or (
-                record.get("url") or record.get("source") or ""
-            )
-            count = by_parent.get(parent, 0)
-            if count >= max_per_parent:
-                continue
-            by_parent[parent] = count + 1
-            parent_limited.append(record)
-
-        max_per_canon = 1
-        seen_canon: Dict[str, int] = {}
-        canon_limited = []
-        for record in parent_limited:
-            canon = self._normalize_for_dedupe(record.get("url") or record.get("source") or "")
-            count = seen_canon.get(canon, 0)
-            if count >= max_per_canon:
-                continue
-            seen_canon[canon] = count + 1
-            canon_limited.append(record)
-
-        return canon_limited
+                    entry["_score_vec"] = max(
+                        float(record.get("_score_vec") or record.get("score") or 0),
+                        float(entry.get("_score_vec") or 0),
+                    )
+        for entry in by_id.values():
+            entry["fusion_score"] = sum(1.0 / (60 + rank) for rank in entry["channel_ranks"].values())
+        return sorted(by_id.values(), key=lambda entry: (-entry["fusion_score"], entry["segment_id"]))
 
     def _tokenize(self, text: str) -> List[str]:
-        return re.findall(r"[A-Za-z0-9_]{2,}", (text or "").lower())
+        normalized = unicodedata.normalize("NFKC", text or "").casefold()
+        normalized = "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
+        return re.findall(r"[^\W_]{2,}", normalized, flags=re.UNICODE)
 
     def _ensure_bm25(self) -> None:
         if self._bm25_ready:

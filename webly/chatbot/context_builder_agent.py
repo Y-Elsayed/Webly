@@ -145,7 +145,7 @@ class ContextBuilderAgent:
             "Task: propose minimal follow-up retrieval actions.\n"
             "Return JSON only in this shape:\n"
             '{"queries": ["..."], "drop_chunk_ids": ["..."]}\n'
-            "- queries: up to 4 focused follow-up searches\n"
+            "- queries: up to 3 focused follow-up searches\n"
             "- drop_chunk_ids: optional low-signal chunk ids to remove\n\n"
             f"User query: {question}\n"
             f"Missing concepts: {missing_concepts}\n"
@@ -155,9 +155,13 @@ class ContextBuilderAgent:
         data = self._extract_json_payload(raw or "")
         if not isinstance(data, dict):
             return {"queries": [], "drop_chunk_ids": []}
+        if set(data) - {"queries", "drop_chunk_ids"}:
+            return {"queries": [], "drop_chunk_ids": []}
 
         queries = data.get("queries") if isinstance(data.get("queries"), list) else []
         drop_ids = data.get("drop_chunk_ids") if isinstance(data.get("drop_chunk_ids"), list) else []
-        queries = [q.strip() for q in queries if isinstance(q, str) and q.strip()][:4]
+        queries = list(dict.fromkeys(
+            q.strip() for q in queries if isinstance(q, str) and q.strip() and len(q) <= 300
+        ))[:3]
         drop_ids = [d.strip() for d in drop_ids if isinstance(d, str) and d.strip()][:8]
         return {"queries": queries, "drop_chunk_ids": drop_ids}

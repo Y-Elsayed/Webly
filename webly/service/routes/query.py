@@ -16,6 +16,9 @@ def _query_response(result: QueryResult) -> QueryResponse:
         supported=result.supported,
         sources=[SourceRefResponse(**source.to_dict()) for source in result.sources],
         trace=result.trace,
+        citations=result.citations,
+        status=result.status,
+        missing_information=result.missing_information,
     )
 
 
