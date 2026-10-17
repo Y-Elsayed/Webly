@@ -2,8 +2,6 @@ import json
 import logging
 import os
 
-import pytest
-
 from webly._webcreeper import JsonFormatter, configure_logging
 
 

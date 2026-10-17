@@ -1,8 +1,6 @@
 import json
 from pathlib import Path
 
-import pytest
-
 from webly.observability.cost_tracker import CostTracker
 
 

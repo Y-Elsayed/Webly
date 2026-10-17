@@ -8,8 +8,6 @@ rather than cryptic errors deep in the pipeline.
 
 from __future__ import annotations
 
-from typing import Any
-
 
 def validate_pipeline_config(config: dict) -> None:
     """Validate a PipelineConfig dict.

@@ -27,7 +27,9 @@ def _default_judge(_question: str, context: str) -> bool:
 
 @dataclass(slots=True)
 class ScriptedPlanner:
-    route_payload: dict[str, object] = field(default_factory=lambda: {"mode": "retrieve_new", "standalone_query": "", "concepts": []})
+    route_payload: dict[str, object] = field(
+        default_factory=lambda: {"mode": "retrieve_new", "standalone_query": "", "concepts": []}
+    )
     extracted_concepts: list[str] = field(default_factory=list)
     followup_payload: dict[str, list[str]] = field(default_factory=lambda: {"queries": [], "drop_chunk_ids": []})
     transform_response: str = "Transformed answer"

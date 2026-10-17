@@ -1,5 +1,6 @@
 line-length = 120
 target-version = "py311"
+extend-exclude = ["webcreeper"]
 
 [lint]
 select = ["E", "F", "I"]
