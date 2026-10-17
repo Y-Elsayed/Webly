@@ -38,7 +38,7 @@ class _DummyQueryPipeline:
         )
 
 
-def test_project_runtime_flushes_tracker_after_query_and_ingest(tmp_path):
+def test_project_runtime_flushes_tracker_after_query_and_ingest(tmp_path, monkeypatch):
     cfg = ProjectConfig.from_dict(
         {"start_url": "https://example.com/docs"},
         output_dir=str(tmp_path / "out"),
@@ -51,6 +51,7 @@ def test_project_runtime_flushes_tracker_after_query_and_ingest(tmp_path):
         query_pipeline=_DummyQueryPipeline(),
         cost_tracker=tracker,
     )
+    monkeypatch.setattr(ProjectRuntime, "ensure_index_loaded", lambda self: True)
 
     result = runtime.query_result("hello", retry_on_empty=True, memory_context="ctx")
     ingest_result = runtime.run_ingest(mode="index_only")
@@ -76,8 +77,9 @@ def test_build_runtime_passes_score_threshold_to_query_pipeline(monkeypatch, tmp
     monkeypatch.setitem(sys.modules, "webly.embedder.hf_sentence_embedder", hf_module)
 
     class DummyDb:
-        def __init__(self):
+        def __init__(self, *, embedding_space=None):
             self.index = None
+            self.embedding_space = embedding_space
 
     class DummyCrawler:
         def __init__(self, **kwargs):

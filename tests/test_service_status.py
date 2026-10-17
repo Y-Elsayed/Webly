@@ -121,3 +121,21 @@ def test_status_uses_runtime_status_when_available(tmp_path, monkeypatch):
     assert body["capabilities"]["has_openai_api_key"] is True
     assert body["capabilities"]["ingest_pipeline_available"] is True
     assert body["capabilities"]["blockers"] == []
+
+
+def test_legacy_index_is_visible_but_not_query_ready(tmp_path):
+    client = TestClient(create_app(storage_root=str(tmp_path)))
+    assert client.post(
+        "/v1/projects",
+        json={"name": "Docs", "config": {"start_url": "https://example.com/docs"}},
+    ).status_code == 201
+    index_dir = tmp_path / "Docs" / "index"
+    index_dir.mkdir(parents=True, exist_ok=True)
+    (index_dir / "embeddings.index").write_bytes(b"legacy")
+
+    response = client.get("/v1/projects/Docs/status")
+    assert response.status_code == 200
+    assert response.json()["index_ready"] is False
+    assert response.json()["capabilities"]["blockers"][-1] == (
+        "Legacy index is incompatible; rebuild from saved crawl results."
+    )

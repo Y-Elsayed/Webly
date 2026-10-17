@@ -39,6 +39,8 @@ class SemanticPageProcessor:
                 "hierarchy": ch.get("hierarchy", []),
                 "outgoing_links": ch.get("outgoing_links", []),
                 "id": ch.get("id"),  # deterministic id for graph joins
+                "start_word": ch.get("start_word"),
+                "end_word": ch.get("end_word"),
             }
             for i, ch in enumerate(chunks)
         ]

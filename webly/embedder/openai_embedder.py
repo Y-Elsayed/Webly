@@ -66,7 +66,7 @@ class OpenAIEmbedder(Embedder):
             return len(enc.encode(text))
         except Exception as e:
             logger.debug(f"tiktoken unavailable or failed, using char-count heuristic: {e}")
-            return max(1, len(text) // 4)
+            return max(1, len(text.encode("utf-8")))
 
     def _call_with_retry(self, fn, max_retries: int = 3, backoff: float = 1.0):
         for attempt in range(max_retries + 1):

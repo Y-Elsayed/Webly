@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
 from dotenv import load_dotenv
 
+from webly._webcreeper import configure_logging
 from webly.chatbot.chatgpt_model import ChatGPTModel
 from webly.chatbot.prompts.system_prompts import apply_mode_flags, get_system_prompt
 from webly.chatbot.webly_chat_agent import WeblyChatAgent
@@ -15,8 +17,8 @@ from webly.pipeline.ingest_pipeline import IngestPipeline
 from webly.pipeline.query_pipeline import QueryPipeline
 from webly.project_config import ProjectConfig
 from webly.query_result import QueryResult
-from webly._webcreeper import configure_logging
 from webly.vector_index.faiss_db import FaissDatabase
+from webly.vector_index.snapshots import SnapshotStore
 
 
 @dataclass(slots=True)
@@ -26,31 +28,43 @@ class ProjectRuntime:
     query_pipeline: QueryPipeline | None
     cost_tracker: CostTracker
     api_key: str | None = None
+    _query_lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    _loaded_version: str | None = None
 
     @property
     def db(self):
         return self.ingest_pipeline.db
 
     def index_exists(self) -> bool:
-        return (
-            os.path.isdir(self.config.index_dir)
-            and os.path.exists(os.path.join(self.config.index_dir, "embeddings.index"))
-            and os.path.exists(os.path.join(self.config.index_dir, "metadata.json"))
-        )
+        return SnapshotStore(self.config.index_dir).active_version() is not None
 
     def ensure_index_loaded(self) -> bool:
-        if getattr(self.db, "index", None) is not None:
-            return True
-        if not self.index_exists():
+        store = SnapshotStore(self.config.index_dir)
+        version = store.active_version()
+        if version is None:
+            if os.path.exists(os.path.join(self.config.index_dir, "embeddings.index")):
+                raise RuntimeError("Legacy index cannot be used; rebuild from saved crawl results")
             return False
-        self.db.load(self.config.index_dir)
+        if self._loaded_version == version:
+            return True
+        path = store.validate(version, embedding_space=self.db.embedding_space)
+        candidate = FaissDatabase(str(path), embedding_space=self.db.embedding_space)
+        self.ingest_pipeline.db = candidate
+        if self.query_pipeline is not None:
+            self.query_pipeline.chat_agent.vector_db = candidate
+            self.query_pipeline.retriever.chat_agent.vector_db = candidate
+            self.query_pipeline.retriever._bm25_ready = False
+        self._loaded_version = version
         return True
 
     def run_ingest(self, **kwargs):
-        try:
-            return self.ingest_pipeline.run(**kwargs)
-        finally:
-            self.cost_tracker.flush()
+        with self._query_lock:
+            try:
+                result = self.ingest_pipeline.run(**kwargs)
+                self._loaded_version = None
+                return result
+            finally:
+                self.cost_tracker.flush()
 
     def query(self, question: str, *, retry_on_empty: bool = False, memory_context: str = "") -> str:
         return self.query_result(
@@ -62,16 +76,19 @@ class ProjectRuntime:
     def query_result(self, question: str, *, retry_on_empty: bool = False, memory_context: str = "") -> QueryResult:
         if self.query_pipeline is None:
             raise RuntimeError("Query pipeline is unavailable for this runtime.")
-        if not self.ensure_index_loaded():
-            raise FileNotFoundError(f"No index found at {self.config.index_dir}")
-        try:
-            return self.query_pipeline.query_result(
-                question,
-                retry_on_empty=retry_on_empty,
-                memory_context=memory_context,
-            )
-        finally:
-            self.cost_tracker.flush()
+        with self._query_lock:
+            if not self.ensure_index_loaded():
+                raise FileNotFoundError(f"No index found at {self.config.index_dir}")
+            try:
+                result = self.query_pipeline.query_result(
+                    question,
+                    retry_on_empty=retry_on_empty,
+                    memory_context=memory_context,
+                )
+                result.trace["index_version"] = self._loaded_version
+                return result
+            finally:
+                self.cost_tracker.flush()
 
 
 def build_runtime(config: Mapping[str, Any] | ProjectConfig, api_key: Optional[str] = None) -> ProjectRuntime:
@@ -102,7 +119,13 @@ def build_runtime(config: Mapping[str, Any] | ProjectConfig, api_key: Optional[s
 
         embedder = HFSentenceEmbedder(emb)
 
-    db = FaissDatabase()
+    embedding_space = {
+        "provider_model": project_config.embedding_model,
+        "dimensions": embedder.dim,
+        "distance": "normalized_inner_product",
+        "embedding_text_version": "chunker-v2",
+    }
+    db = FaissDatabase(embedding_space=embedding_space)
     chatbot = None
     if api_key:
         chatbot = ChatGPTModel(api_key=api_key, model=project_config.chat_model, cost_tracker=tracker)

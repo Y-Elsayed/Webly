@@ -11,7 +11,7 @@ from .vector_db import VectorDatabase
 
 logger = logging.getLogger(__name__)
 
-INDEX_VERSION: int = 1
+INDEX_VERSION: int = 2
 
 
 class FaissDatabase(VectorDatabase):
@@ -28,8 +28,9 @@ class FaissDatabase(VectorDatabase):
     _METADATA_FILENAME = "metadata.json"
     _LEGACY_METADATA_FILENAME = "metadata.meta"
 
-    def __init__(self, index_path: str = None):
+    def __init__(self, index_path: str = None, *, embedding_space: Optional[Dict] = None):
         self.index_path = index_path
+        self.embedding_space = embedding_space
         self.index: Optional[faiss.Index] = None
         self.dim: Optional[int] = None
 
@@ -78,10 +79,13 @@ class FaissDatabase(VectorDatabase):
     def _key_for_idx(rec: Dict, idx: int) -> str:
         """
         Stable key used for id hashing.
-        Priority: explicit stored _key -> url -> id -> fallback 'record_{idx}'.
+        The canonical segment identifier is the only permissible vector key.
         We store _key in metadata during add() so rebuilds remain stable even if positions shift.
         """
-        return rec.get("_key") or rec.get("url") or rec.get("id") or f"record_{idx}"
+        key = rec.get("segment_id") or rec.get("id")
+        if not isinstance(key, str) or not key:
+            raise ValueError(f"Record {idx} has no canonical segment_id")
+        return key
 
     def _maybe_train_ivf(self, arr: np.ndarray) -> None:
         """
@@ -151,14 +155,19 @@ class FaissDatabase(VectorDatabase):
         if not records:
             return
 
+        keys: List[str] = [self._key_for_idx(rec, len(self.metadata) + i) for i, rec in enumerate(records)]
+        if len(keys) != len(set(keys)) or any(key in self.id_map for key in keys):
+            raise ValueError("Duplicate canonical segment_id in index")
         vectors = [rec["embedding"] for rec in records]
         arr = np.asarray(vectors, dtype="float32")
+        if arr.ndim != 2 or arr.shape[1] != self.dim or not np.isfinite(arr).all():
+            raise ValueError("Embedding dimensions or values are invalid")
         arr = self._normalize(arr)
 
         # Determine stable keys and faiss ids
-        start_pos = len(self.metadata)
-        keys: List[str] = [self._key_for_idx(rec, start_pos + i) for i, rec in enumerate(records)]
         ids = np.asarray([self._id64_from_key(k) for k in keys], dtype="int64")
+        if -1 in ids or len(set(map(int, ids))) != len(ids) or any(int(fid) in self._faiss_to_pos for fid in ids):
+            raise ValueError("Vector ID collision; refusing ambiguous index")
 
         # Train IVF if needed (safe no-op for non-trainable indexes)
         self._maybe_train_ivf(arr)
@@ -170,6 +179,9 @@ class FaissDatabase(VectorDatabase):
         for i, rec in enumerate(records):
             rec_copy = rec.copy()
             rec_copy.pop("embedding", None)
+            rec_copy["segment_id"] = keys[i]
+            rec_copy["id"] = keys[i]
+            rec_copy["vector_id"] = int(ids[i])
             # store key so future map rebuilds don't depend on position
             rec_copy["_key"] = keys[i]
 
@@ -208,7 +220,8 @@ class FaissDatabase(VectorDatabase):
 
             rec = self.metadata[pos].copy()
             rec["score"] = float(dist_row[i])  # cosine similarity ∈ [-1, 1]
-            rec["id"] = fid  # stable external id = faiss id
+            rec["vector_id"] = fid
+            rec["segment_id"] = rec["id"]
             results.append(rec)
 
         return results
@@ -225,6 +238,10 @@ class FaissDatabase(VectorDatabase):
         for pos, rec in enumerate(self.metadata):
             key = self._key_for_idx(rec, pos)  # prefers stored _key if present
             fid = int(self._id64_from_key(key))
+            if key in self.id_map or fid in self._faiss_to_pos:
+                raise RuntimeError("Duplicate segment/vector ID in index metadata; rebuild required")
+            if rec.get("vector_id") != fid:
+                raise RuntimeError("Vector mapping mismatch; rebuild required")
             self.id_map[key] = fid
             self._faiss_to_pos[fid] = pos
             self._pos_to_faiss[pos] = fid
@@ -292,6 +309,9 @@ class FaissDatabase(VectorDatabase):
         # Update metadata (preserve stored _key if not provided)
         rec_copy = new_record.copy()
         rec_copy.pop("embedding", None)
+        rec_copy["segment_id"] = self.metadata[pos]["segment_id"]
+        rec_copy["id"] = self.metadata[pos]["segment_id"]
+        rec_copy["vector_id"] = fid
         if "_key" not in rec_copy:
             # keep the previous key to maintain mapping stability
             prev_key = self.metadata[pos].get("_key")
@@ -303,6 +323,7 @@ class FaissDatabase(VectorDatabase):
     def save(self, path: str) -> None:
         if self.index is None:
             raise RuntimeError("Nothing to save — index is not initialized.")
+        self.validate()
 
         os.makedirs(path, exist_ok=True)
         faiss.write_index(self.index, os.path.join(path, "embeddings.index"))
@@ -319,6 +340,7 @@ class FaissDatabase(VectorDatabase):
                 "hnsw_efSearch": self._hnsw_efSearch,
                 "hnsw_efConstruction": self._hnsw_efConstruction,
                 "index_version": INDEX_VERSION,
+                "embedding_space": self.embedding_space,
             },
         }
         with open(os.path.join(path, self._METADATA_FILENAME), "w", encoding="utf-8") as f:
@@ -340,24 +362,22 @@ class FaissDatabase(VectorDatabase):
         else:
             raise FileNotFoundError(f"Missing metadata file at {metadata_path}")
 
-        # Backward compatibility: handle old format (list only)
         if isinstance(payload, dict) and "metadata" in payload:
             self.metadata = payload["metadata"]
             cfg = payload.get("config", {})
 
             # Version check
             stored_version = cfg.get("index_version", None)
-            if stored_version is None:
-                logger.warning(
-                    "Index has no 'index_version' field — built before versioning was introduced. "
-                    "Consider rebuilding the index. Loading will proceed but may behave unexpectedly."
-                )
-            elif stored_version != INDEX_VERSION:
+            if stored_version != INDEX_VERSION:
                 raise RuntimeError(
-                    f"Index format version mismatch: this Webly version requires format v{INDEX_VERSION}, "
+                    f"Index format version mismatch: rebuild required for v{INDEX_VERSION}, "
                     f"but the loaded index was built with format v{stored_version}. "
-                    "Delete the index directory and run a full ingest to rebuild the index."
+                    "Preserve the old index and run a full ingest from saved crawl content."
                 )
+            stored_space = cfg.get("embedding_space")
+            if self.embedding_space is not None and stored_space != self.embedding_space:
+                raise RuntimeError("Embedding space mismatch; rebuild required")
+            self.embedding_space = stored_space
 
             self._index_type = cfg.get("index_type", "flat")
             self._ivf_nlist = cfg.get("ivf_nlist", self._ivf_nlist)
@@ -367,14 +387,27 @@ class FaissDatabase(VectorDatabase):
             self._hnsw_efSearch = cfg.get("hnsw_efSearch", self._hnsw_efSearch)
             self._hnsw_efConstruction = cfg.get("hnsw_efConstruction", self._hnsw_efConstruction)
         else:
-            # Older versions stored only the list
-            self.metadata = payload
+            raise RuntimeError("Legacy index metadata has no format contract; rebuild required")
 
         # Rebuild maps deterministically from metadata (uses stored _key if present)
         self._rebuild_maps_from_metadata()
+        self.validate()
 
         # Dim is embedded in the FAISS index already
         try:
             self.dim = self.index.d
         except Exception as e:
             logger.debug(f"Could not read index dimension from index.d: {e}")
+
+    def validate(self) -> None:
+        if self.index is None:
+            raise RuntimeError("Index not initialized")
+        if self.index.ntotal != len(self.metadata) or len(self._faiss_to_pos) != len(self.metadata):
+            raise RuntimeError("Index count/mapping mismatch; rebuild required")
+        actual = {int(x) for x in faiss.vector_to_array(self.index.id_map)}
+        if actual != set(self._faiss_to_pos):
+            raise RuntimeError("Orphaned or missing vector ID; rebuild required")
+        for fid, pos in self._faiss_to_pos.items():
+            rec = self.metadata[pos]
+            if rec.get("vector_id") != fid or rec.get("segment_id") != rec.get("id"):
+                raise RuntimeError("Segment mapping mismatch; rebuild required")

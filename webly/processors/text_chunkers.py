@@ -58,6 +58,8 @@ class TextChunker(ABC):
 
 class SlidingTextChunker(TextChunker):
     def __init__(self, max_words: int = 350, overlap: int = 50):
+        if max_words < 1 or overlap < 0:
+            raise ValueError("max_words must be positive and overlap nonnegative")
         self.max_words = max_words
         self.overlap = overlap
         self._heading_re = re.compile(r"^h([1-6])$", re.I)
@@ -129,6 +131,11 @@ class SlidingTextChunker(TextChunker):
             blocks = []
             # block-level nodes likely to contain meaningful text
             for node in body.find_all(["p", "li", "pre", "code", "blockquote", "td", "table"]):
+                if any(
+                    parent.name in {"p", "li", "pre", "code", "blockquote", "td", "table"}
+                    for parent in node.parents if isinstance(parent, Tag)
+                ):
+                    continue
                 txt, anchors = self._block_text_and_anchors(node)
                 if txt and len(txt.split()) > 3:
                     blocks.append({"text": txt, "anchors": anchors})
@@ -141,33 +148,29 @@ class SlidingTextChunker(TextChunker):
             m = self._heading_re.match(tag.name)
             return int(m.group(1)) if m else 6
 
-        # Maintain current heading path (H1..Hn)
         path: List[str] = []
-        for i, h in enumerate(headings):
-            curr_lvl = level_of(h)
-            # update path to this level
-            text = self._text(h)
-            if curr_lvl - 1 <= len(path):
+        blocks: List[Dict] = []
+        block_names = {"p", "li", "pre", "code", "blockquote", "td", "table"}
+        for node in body.descendants:
+            if not isinstance(node, Tag):
+                continue
+            if self._heading_re.match(node.name or ""):
+                if blocks:
+                    sections.append({"hierarchy": path[:], "blocks": blocks})
+                    blocks = []
+                curr_lvl = level_of(node)
                 path = path[: curr_lvl - 1]
-            # ensure parents exist up to level-1
-            while len(path) < curr_lvl - 1:
-                path.append("")  # missing parent heading
-            path = path + [text]
-
-            # Collect blocks until next heading of <= curr_lvl
-            blocks: List[Dict] = []
-            for sib in h.next_siblings:
-                if isinstance(sib, Tag):
-                    m = self._heading_re.match(sib.name or "")
-                    if m and int(m.group(1)) <= curr_lvl:
-                        break  # next sibling heading closes this section
-                    if sib.name in ["p", "li", "pre", "code", "blockquote", "td", "table"]:
-                        txt, anchors = self._block_text_and_anchors(sib)
-                        if txt and len(txt.split()) > 3:
-                            blocks.append({"text": txt, "anchors": anchors})
-            if blocks:
-                # copy the path for immutability per section
-                sections.append({"hierarchy": path[:], "blocks": blocks})
+                while len(path) < curr_lvl - 1:
+                    path.append("")
+                path.append(self._text(node))
+            elif node.name in block_names:
+                if any(parent.name in block_names for parent in node.parents if isinstance(parent, Tag)):
+                    continue
+                txt, anchors = self._block_text_and_anchors(node)
+                if txt and len(txt.split()) > 3:
+                    blocks.append({"text": txt, "anchors": anchors})
+        if blocks:
+            sections.append({"hierarchy": path[:], "blocks": blocks})
 
         return sections
 
@@ -176,66 +179,28 @@ class SlidingTextChunker(TextChunker):
         """
         Merge consecutive blocks into chunks up to max_words with overlap, carrying anchors that fall inside.
         """
+        words: List[str] = []
+        anchors: List[Tuple[int, Dict]] = []
+        for block in blocks:
+            start = len(words)
+            words.extend(block["text"].split())
+            anchors.extend((start, anchor) for anchor in block.get("anchors", []))
         chunks: List[Dict] = []
-        window_words: List[str] = []
-        window_anchors: List[Dict] = []
-        section_chunks_idx = 0
-
-        # To support overlap, keep a small trailing buffer of words and anchors
-        trailing_words: List[str] = []
-        trailing_anchors: List[Dict] = []
-
-        def flush_chunk():
-            nonlocal window_words, window_anchors, section_chunks_idx, trailing_words, trailing_anchors
-            if not window_words:
-                return
-            text = " ".join(window_words).strip()
-            tokens = len(window_words)
-            chunk_id = self._hash_id(url, hierarchy, section_chunks_idx)
-            chunks.append(
-                {
-                    "id": chunk_id,
-                    "url": url,
-                    "text": text,
-                    "tokens": tokens,
-                    "hierarchy": hierarchy[:],
-                    "outgoing_links": window_anchors[:],  # anchors inside this chunk
-                }
-            )
-            section_chunks_idx += 1
-            # prepare overlap from end of window
-            if self.overlap > 0 and len(window_words) > self.overlap:
-                trailing_words = window_words[-self.overlap :]
-                # we cannot precisely trim anchors by word offset here; keep last window anchors
-                trailing_anchors = window_anchors[-max(1, min(len(window_anchors), 3)) :]
-            else:
-                trailing_words, trailing_anchors = [], []
-            window_words, window_anchors = [], []
-
-        for blk in blocks:
-            bw = blk["text"].split()
-            ba = blk.get("anchors", [])
-            # if adding this block would exceed the window, flush first
-            if window_words and len(window_words) + len(bw) > self.max_words:
-                flush_chunk()
-                # start next window with overlap seed
-                window_words = trailing_words[:]
-                window_anchors = trailing_anchors[:]
-
-            window_words.extend(bw)
-            window_anchors.extend(ba)
-
-            # flush if we hit/exceeded max_words
-            while len(window_words) >= self.max_words:
-                flush_chunk()
-                # seed with overlap for next chunk
-                window_words = trailing_words[:]
-                window_anchors = trailing_anchors[:]
-
-        # leftover
-        if window_words:
-            flush_chunk()
-
+        step = max(1, self.max_words - min(self.overlap, self.max_words - 1))
+        for start in range(0, len(words), step):
+            end = min(start + self.max_words, len(words))
+            chunks.append({
+                "id": self._hash_id(url, hierarchy, len(chunks)),
+                "url": url,
+                "text": " ".join(words[start:end]),
+                "tokens": end - start,
+                "start_word": start,
+                "end_word": end,
+                "hierarchy": hierarchy[:],
+                "outgoing_links": [anchor for offset, anchor in anchors if start <= offset < end],
+            })
+            if end == len(words):
+                break
         return chunks
 
     def chunk_html(self, html: str, url: str) -> List[Dict]:
@@ -254,17 +219,7 @@ class SlidingTextChunker(TextChunker):
             body = soup.body or soup
             full_text = body.get_text(separator=" ", strip=True)
             if full_text:
-                tokens = len(full_text.split())
-                all_chunks.append(
-                    {
-                        "id": self._hash_id(url, [], 0),
-                        "url": url,
-                        "text": full_text,
-                        "tokens": tokens,
-                        "hierarchy": [],
-                        "outgoing_links": [],
-                    }
-                )
+                all_chunks.extend(self._chunk_section_blocks(url, [], [{"text": full_text, "anchors": []}]))
 
         return all_chunks
 

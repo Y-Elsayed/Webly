@@ -1,14 +1,18 @@
+import hashlib
 import json
 import os
-import re
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
+from filelock import FileLock
+
+from webly._webcreeper import configure_logging
 from webly.crawl.crawler import Crawler
 from webly.embedder.base_embedder import Embedder
 from webly.pipeline.embedding_text import chunk_text_for_embedding, count_tokens, hard_char_splits, max_input_tokens
+from webly.vector_index.faiss_db import FaissDatabase
+from webly.vector_index.snapshots import SnapshotStore
 from webly.vector_index.vector_db import VectorDatabase
-from webly._webcreeper import configure_logging
 
 try:
     from webly.processors.text_summarizer import TextSummarizer
@@ -195,6 +199,8 @@ class IngestPipeline:
             raise FileNotFoundError(f"[IngestPipeline] results not found at {resolved_results}")
         if os.path.getsize(resolved_results) == 0:
             raise FileNotFoundError(f"[IngestPipeline] results file is empty at {resolved_results}")
+        with open(resolved_results, "rb") as source_stream:
+            self._input_digest = hashlib.file_digest(source_stream, "sha256").hexdigest()
 
         # Load site graph once
         graph_path = os.path.join(getattr(self.crawler, "output_dir", "."), "graph.json")
@@ -246,10 +252,12 @@ class IngestPipeline:
                     incoming_links = incoming_map.get(url, [])
 
                     if not url or not html:
-                        self.logger.warning(f"Skipping malformed record (missing url/html): {record}")
-                        continue
+                        raise ValueError("Crawl record is missing URL or HTML")
 
                     chunks = self.page_processor.process(url, html)
+                    if not chunks:
+                        raise ValueError(f"No extractable evidence for {url}")
+                    page_version_id = hashlib.sha256((url + "\0" + html).encode("utf-8")).hexdigest()
 
                     if self.progress_callback:
                         try:
@@ -261,6 +269,7 @@ class IngestPipeline:
                         content_to_embed = chunk.get("text", "")
                         if not isinstance(content_to_embed, str) or not content_to_embed.strip():
                             continue
+                        original_text = content_to_embed
 
                         # Debug: raw chunks
                         if self.debug and chunk_debug_file:
@@ -304,19 +313,26 @@ class IngestPipeline:
                             try:
                                 embedding = self.embedder.embed(part)
                             except Exception as e:
-                                self.logger.error(f"Embedding error for {url} (seg {seg_idx}): {e}")
-                                continue
+                                raise RuntimeError(f"Embedding error for {url} (seg {seg_idx})") from e
                             if embedding is None:
-                                self.logger.warning(
-                                    f"Skipping chunk from {url} seg {seg_idx} - embedding returned None."
-                                )
-                                continue
+                                raise RuntimeError(f"Embedding returned no vector for {url} seg {seg_idx}")
+
+                            segment_id = hashlib.sha256(
+                                (
+                                    f"{page_version_id}:{chunk.get('chunk_index')}:{chunk.get('id')}:"
+                                    f"{seg_idx}:chunker-v2"
+                                ).encode()
+                            ).hexdigest()
 
                             rec = {
                                 **chunk,  # keep original fields (url, hierarchy, etc.)
-                                "text": part,  # the actual embedded segment text
+                                "text": original_text,
+                                "original_text": original_text,
+                                "embedding_text": part,
                                 "embedding": embedding,
-                                "id": f"{parent_chunk_id}__seg_{seg_idx}",
+                                "id": segment_id,
+                                "segment_id": segment_id,
+                                "page_version_id": page_version_id,
                                 "metadata": {
                                     **(chunk.get("metadata", {}) or {}),
                                     "chunk_id": parent_chunk_id,  # keep original id as parent
@@ -330,10 +346,10 @@ class IngestPipeline:
                             }
                             transformed_records.append(rec)
 
-                except json.JSONDecodeError:
-                    self.logger.warning("Skipping line (not valid JSON).")
+                except json.JSONDecodeError as e:
+                    raise RuntimeError(f"Invalid crawl record on line {idx}") from e
                 except Exception as e:
-                    self.logger.warning(f"Skipping record due to error: {e}")
+                    raise RuntimeError(f"Failed to transform crawl record on line {idx}") from e
 
         if summary_debug_file:
             summary_debug_file.close()
@@ -343,24 +359,36 @@ class IngestPipeline:
             chunk_debug_file.close()
             self.logger.info(f"Wrote raw chunks to {self.debug_chunks_path}")
 
+        with open(resolved_results, "rb") as source_stream:
+            if hashlib.file_digest(source_stream, "sha256").hexdigest() != self._input_digest:
+                raise RuntimeError("Crawl results changed during indexing; publication cancelled")
+
         return transformed_records
 
     def load(self, records: List[dict]):
         """
         Write records to FAISS and persist to disk.
         """
-        if not isinstance(records, list):
-            records = []
+        if not isinstance(records, list) or not records:
+            raise RuntimeError("No valid segments to publish")
+        if hasattr(self, "_input_digest"):
+            with open(self._resolve_results_path(require_non_empty=True), "rb") as source_stream:
+                if hashlib.file_digest(source_stream, "sha256").hexdigest() != self._input_digest:
+                    raise RuntimeError("Crawl results changed before publication")
+        self.db.add(records)
 
-        for rec in records:
-            try:
-                self.db.add([rec])
-            except Exception as e:
-                self.logger.error(f"Failed to add record: {e}")
-
-        # Persist index + metadata
+        # Publish only a complete, validated immutable snapshot.
         try:
-            self.db.save(self.index_path)
+            if isinstance(self.db, FaissDatabase):
+                store = SnapshotStore(self.index_path)
+                self.published_version = store.publish(
+                    self.db,
+                    source_path=self._resolve_results_path(require_non_empty=True),
+                    expected_source_digest=getattr(self, "_input_digest", None),
+                    expected_version=getattr(self, "_expected_version", store.active_version()),
+                )
+            else:
+                self.db.save(self.index_path)
             self.logger.info(f"Saved index to {self.index_path}")
         except Exception as e:
             raise RuntimeError(f"[IngestPipeline] Failed to save index to {self.index_path}: {e}")
@@ -369,6 +397,22 @@ class IngestPipeline:
     # Orchestrator
     # -------------------------------------------------------------------------
     def run(
+        self,
+        override_callback=None,
+        settings_override: dict = None,
+        force_crawl: bool = False,
+        mode: str = "both",
+    ):
+        os.makedirs(self.index_path, exist_ok=True)
+        with FileLock(os.path.join(self.index_path, ".ingest.lock")):
+            return self._run_unlocked(
+                override_callback=override_callback,
+                settings_override=settings_override,
+                force_crawl=force_crawl,
+                mode=mode,
+            )
+
+    def _run_unlocked(
         self,
         override_callback=None,
         settings_override: dict = None,
@@ -395,11 +439,18 @@ class IngestPipeline:
         if mode in ("crawl_only", "both"):
             # Decide whether to crawl
             resolved_before = self._resolve_results_path(require_non_empty=False)
-            need_crawl = force_crawl or not (os.path.exists(resolved_before) and os.path.getsize(resolved_before) > 0)
+            crawl_marker = os.path.join(getattr(self.crawler, "output_dir", "."), ".crawl_incomplete")
+            need_crawl = (
+                force_crawl or os.path.exists(crawl_marker)
+                or not (os.path.exists(resolved_before) and os.path.getsize(resolved_before) > 0)
+            )
 
             if need_crawl:
                 self.logger.info(f"Crawling (force={force_crawl})...")
                 writer_cb = override_callback or self._default_page_writer
+                os.makedirs(os.path.dirname(crawl_marker), exist_ok=True)
+                with open(crawl_marker, "w", encoding="utf-8") as marker:
+                    marker.write("incomplete\n")
 
                 try:
                     self.crawler.crawl(
@@ -410,6 +461,7 @@ class IngestPipeline:
                         self.crawler.crawl(writer_cb)
                     except TypeError:
                         self.crawler.crawl()
+                os.remove(crawl_marker)
 
             # Re-resolve after crawl
             resolved_after = self._resolve_results_path(require_non_empty=False)
@@ -475,6 +527,7 @@ class IngestPipeline:
                     ),
                 }
             try:
+                self._expected_version = SnapshotStore(self.index_path).active_version()
                 records = self.transform()
                 self.load(records)
                 indexed_url_count = len({

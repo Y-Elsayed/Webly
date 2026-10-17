@@ -19,11 +19,11 @@ def count_tokens(embedder: Any, text: str, logger=None) -> int:
         except Exception as exc:
             if logger is not None:
                 logger.debug(f"embedder.count_tokens failed, using char-count heuristic: {exc}")
-    return max(1, len(text) // 4)
+    return max(1, len(text.encode("utf-8")))
 
 
 def hard_char_splits(text: str, max_tokens: int) -> list[str]:
-    char_budget = max(800, max_tokens * 4)
+    char_budget = max(1, max_tokens)
     out: list[str] = []
     start = 0
     total = len(text)
@@ -34,7 +34,7 @@ def hard_char_splits(text: str, max_tokens: int) -> list[str]:
 
 
 def chunk_text_for_embedding(embedder: Any, text: str, logger=None, safety_ratio: float = 0.9) -> list[str]:
-    max_tok = int(max_input_tokens(embedder) * getattr(embedder, "safety_ratio", safety_ratio))
+    max_tok = max(1, int(max_input_tokens(embedder) * getattr(embedder, "safety_ratio", safety_ratio)))
     if count_tokens(embedder, text, logger) <= max_tok:
         return [text]
 
@@ -82,4 +82,16 @@ def chunk_text_for_embedding(embedder: Any, text: str, logger=None, safety_ratio
         current_tokens += paragraph_tokens
 
     flush()
-    return [chunk for chunk in chunks if chunk]
+    safe_chunks: list[str] = []
+    for chunk in chunks:
+        pending = [chunk]
+        while pending:
+            part = pending.pop()
+            if count_tokens(embedder, part, logger) <= max_tok:
+                safe_chunks.append(part)
+                continue
+            if len(part) <= 1:
+                raise ValueError("Single character exceeds embedding token ceiling")
+            middle = len(part) // 2
+            pending.extend([part[middle:], part[:middle]])
+    return [chunk for chunk in safe_chunks if chunk]

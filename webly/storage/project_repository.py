@@ -70,7 +70,11 @@ class FileProjectRepository:
 
     def save(self, project: str, cfg: Mapping[str, Any] | ProjectConfig) -> ProjectConfig:
         paths = self.get_paths(project)
-        config = cfg if isinstance(cfg, ProjectConfig) else ProjectConfig.from_dict(cfg, output_dir=paths.root, index_dir=paths.index)
+        config = (
+            cfg
+            if isinstance(cfg, ProjectConfig)
+            else ProjectConfig.from_dict(cfg, output_dir=paths.root, index_dir=paths.index)
+        )
         os.makedirs(paths.root, exist_ok=True)
         os.makedirs(paths.index, exist_ok=True)
         os.makedirs(paths.chats, exist_ok=True)

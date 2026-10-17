@@ -21,6 +21,7 @@ sys.modules.setdefault("webly.processors.text_summarizer", _stub_sum)
 FaissDatabase = pytest.importorskip("webly.vector_index.faiss_db", exc_type=ImportError).FaissDatabase
 
 from webly.pipeline.ingest_pipeline import IngestPipeline  # noqa: E402
+from webly.vector_index.snapshots import SnapshotStore  # noqa: E402
 
 # ── Dummy classes ─────────────────────────────────────────────────────────────
 
@@ -95,15 +96,18 @@ def test_full_ingest_cycle(tmp_path: Path):
     result = pipe.run(mode="both")
 
     assert result["indexed"] is True
-    assert (Path(tmp_path) / "idx" / "embeddings.index").exists()
-    assert (Path(tmp_path) / "idx" / "metadata.json").exists()
+    store = SnapshotStore(tmp_path / "idx")
+    version = store.active_version()
+    assert version is not None
+    assert (store.version_path(version) / "embeddings.index").exists()
+    assert (store.version_path(version) / "results.jsonl").exists()
 
     # Checkpoint written with correct stage
     checkpoint = json.loads((Path(tmp_path) / "out" / "checkpoint.json").read_text())
     assert checkpoint["stage"] == "load_done"
 
     # Reload index and search
-    db2 = FaissDatabase(str(tmp_path / "idx"))
+    db2 = FaissDatabase(str(store.validate(version)))
     query_vec = IntegrationDummyEmbedder().embed("capital France")
     results = db2.search(query_vec, top_k=3)
     assert len(results) > 0
@@ -114,7 +118,8 @@ def test_crawled_at_preserved_in_index(tmp_path: Path):
     pipe = _make_ingest_pipeline(tmp_path)
     pipe.run(mode="both")
 
-    db2 = FaissDatabase(str(tmp_path / "idx"))
+    store = SnapshotStore(tmp_path / "idx")
+    db2 = FaissDatabase(str(store.validate(store.active_version())))
     query_vec = IntegrationDummyEmbedder().embed("capital France")
     results = db2.search(query_vec, top_k=3)
     assert any(
@@ -146,6 +151,21 @@ def test_resume_skips_crawl_when_results_exist(tmp_path: Path):
     assert not crawler.crawl_called
 
 
+def test_incomplete_crawl_marker_forces_recrawl(tmp_path: Path):
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "results.jsonl").write_text(json.dumps(_SYNTHETIC_PAGES[0]) + "\n", encoding="utf-8")
+    (out_dir / ".crawl_incomplete").write_text("incomplete\n", encoding="utf-8")
+    crawler = IntegrationDummyCrawler(str(out_dir), _SYNTHETIC_PAGES)
+    pipe = IngestPipeline(
+        crawler=crawler, index_path=str(tmp_path / "idx"), embedder=IntegrationDummyEmbedder(),
+        db=FaissDatabase(), summarizer=None, use_summary=False,
+    )
+    pipe.run(mode="both")
+    assert crawler.crawl_called
+    assert not (out_dir / ".crawl_incomplete").exists()
+
+
 def test_empty_crawl_returns_graceful_result(tmp_path: Path):
     """A crawler that produces no pages should return empty_results=True without raising."""
     pipe = _make_ingest_pipeline(tmp_path, pages=[])
@@ -159,18 +179,70 @@ def test_index_version_roundtrip(tmp_path: Path):
     pipe = _make_ingest_pipeline(tmp_path)
     pipe.run(mode="both")
 
-    meta_path = tmp_path / "idx" / "metadata.json"
+    store = SnapshotStore(tmp_path / "idx")
+    meta_path = store.version_path(store.active_version()) / "metadata.json"
     data = json.loads(meta_path.read_text(encoding="utf-8"))
     data["config"]["index_version"] = 99
     meta_path.write_text(json.dumps(data), encoding="utf-8")
 
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        store.validate(store.active_version())
     with pytest.raises(RuntimeError, match="version mismatch"):
-        FaissDatabase(str(tmp_path / "idx"))
+        FaissDatabase(str(store.version_path(store.active_version())))
+
+
+def test_summary_keeps_original_evidence_in_published_index(tmp_path: Path):
+    pipe = _make_ingest_pipeline(tmp_path)
+    pipe.summarizer = lambda _url, _text: {"summary": "Paris summary only"}
+    pipe.use_summary = True
+    pipe.run(mode="both")
+    store = SnapshotStore(tmp_path / "idx")
+    db = FaissDatabase(str(store.validate(store.active_version())))
+    hit = db.search(IntegrationDummyEmbedder().embed("Paris"), top_k=1)[0]
+    assert "The capital of France is Paris" in hit["original_text"]
+    assert hit["text"] == hit["original_text"]
+    assert hit["embedding_text"] == "Paris summary only"
+    assert hit["segment_id"] == hit["id"]
+    assert hit["page_version_id"]
+
+
+def test_embedding_failure_never_changes_active_snapshot(tmp_path: Path):
+    pipe = _make_ingest_pipeline(tmp_path)
+    pipe.run(mode="both")
+    store = SnapshotStore(tmp_path / "idx")
+    first = store.active_version()
+
+    class FailingEmbedder(IntegrationDummyEmbedder):
+        def embed(self, _text):
+            raise RuntimeError("simulated provider outage")
+
+    pipe.embedder = FailingEmbedder()
+    with pytest.raises(RuntimeError, match="transform crawl record"):
+        pipe.run(mode="index_only")
+    assert store.active_version() == first
+    assert FaissDatabase(str(store.validate(first))).index.ntotal > 0
+
+
+def test_legacy_index_requires_explicit_rebuild_from_crawl_results(tmp_path: Path):
+    pipe = _make_ingest_pipeline(tmp_path)
+    legacy = tmp_path / "idx"
+    legacy.mkdir()
+    old = FaissDatabase()
+    old.create(4)
+    old.add([{"id": "old", "url": "https://example.com/page1", "text": "old", "embedding": [1, 0, 0, 0]}])
+    old.save(str(legacy))
+    assert SnapshotStore(legacy).active_version() is None
+    (tmp_path / "out" / "results.jsonl").write_text(json.dumps(_SYNTHETIC_PAGES[0]) + "\n", encoding="utf-8")
+    pipe.run(mode="index_only")
+    version = SnapshotStore(legacy).active_version()
+    assert version is not None
+    assert (legacy / "embeddings.index").exists()  # preserved for audit/rollback, never served
+    assert FaissDatabase(str(SnapshotStore(legacy).validate(version))).index.ntotal > 0
 
 
 def test_html_saver_includes_crawled_at():
     """HTMLSaver must add a crawled_at ISO timestamp to every page dict."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from webly.crawl.handlers import HTMLSaver
 

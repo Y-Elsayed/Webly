@@ -1,5 +1,4 @@
 import json
-import logging
 from pathlib import Path
 
 import pytest
@@ -64,15 +63,40 @@ def test_index_version_mismatch_raises_runtime_error(tmp_path: Path):
         FaissDatabase(str(path))
 
 
-def test_missing_version_warns_but_loads(tmp_path: Path, caplog):
+def test_missing_version_is_rejected_for_rebuild(tmp_path: Path):
     path = _save_one_record_index(tmp_path)
     meta_path = path / "metadata.json"
     data = json.loads(meta_path.read_text(encoding="utf-8"))
     del data["config"]["index_version"]
     meta_path.write_text(json.dumps(data), encoding="utf-8")
 
-    with caplog.at_level(logging.WARNING):
-        db = FaissDatabase(str(path))
+    with pytest.raises(RuntimeError, match="rebuild required"):
+        FaissDatabase(str(path))
 
-    assert db.index is not None
-    assert any("index_version" in record.message for record in caplog.records)
+
+def test_same_page_segments_keep_distinct_evidence_after_reload(tmp_path: Path):
+    db = FaissDatabase()
+    db.create(2)
+    db.add([
+        {"id": "segment-a", "url": "https://a/page", "original_text": "Fee is 10", "embedding": [1, 0]},
+        {"id": "segment-b", "url": "https://a/page", "original_text": "Deadline is June", "embedding": [0, 1]},
+    ])
+    assert {hit["segment_id"] for hit in db.search([1, 0], 2)} == {"segment-a", "segment-b"}
+    path = tmp_path / "index"
+    db.save(str(path))
+    loaded = FaissDatabase(str(path))
+    assert {hit["segment_id"]: hit["original_text"] for hit in loaded.search([1, 0], 2)} == {
+        "segment-a": "Fee is 10", "segment-b": "Deadline is June"
+    }
+    assert len({hit["vector_id"] for hit in loaded.search([1, 0], 2)}) == 2
+
+
+def test_duplicate_and_collision_are_rejected(tmp_path: Path, monkeypatch):
+    db = FaissDatabase()
+    db.create(2)
+    record = {"id": "a", "embedding": [1, 0]}
+    with pytest.raises(ValueError, match="Duplicate"):
+        db.add([record, record])
+    monkeypatch.setattr(db, "_id64_from_key", lambda _key: np.int64(5))
+    with pytest.raises(ValueError, match="collision"):
+        db.add([record, {"id": "b", "embedding": [0, 1]}])

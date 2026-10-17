@@ -6,6 +6,7 @@ from webly.query_result import QueryResult
 from webly.runtime import build_runtime
 from webly.service.errors import BadRequestError, NotFoundError, ServiceUnavailableError
 from webly.storage.project_repository import FileProjectRepository
+from webly.vector_index.snapshots import SnapshotStore
 
 
 class RuntimeService:
@@ -14,6 +15,8 @@ class RuntimeService:
 
     @staticmethod
     def _require_query_ready(status: dict) -> None:
+        if status.get("legacy_index"):
+            raise ServiceUnavailableError("Legacy index is incompatible; rebuild from saved crawl results")
         if not status["capabilities"]["query_pipeline_available"]:
             raise ServiceUnavailableError("OPENAI_API_KEY is required for query and chat responses.")
         if not status["index_ready"]:
@@ -36,7 +39,9 @@ class RuntimeService:
         except RuntimeError as exc:
             raise ServiceUnavailableError(str(exc)) from exc
 
-    def query_project(self, project: str, *, question: str, retry_on_empty: bool = False, memory_context: str = "") -> QueryResult:
+    def query_project(
+        self, project: str, *, question: str, retry_on_empty: bool = False, memory_context: str = ""
+    ) -> QueryResult:
         status = self.status(project)
         self._require_query_ready(status)
         runtime = self.build_project_runtime(project)
@@ -69,11 +74,8 @@ class RuntimeService:
         config = self.projects.load(safe_name)
         results_path = os.path.join(config.output_dir, config.results_file)
         results_ready = os.path.exists(results_path) and os.path.getsize(results_path) > 0
-        index_ready = (
-            os.path.isdir(config.index_dir)
-            and os.path.exists(os.path.join(config.index_dir, "embeddings.index"))
-            and os.path.exists(os.path.join(config.index_dir, "metadata.json"))
-        )
+        index_ready = SnapshotStore(config.index_dir).active_version() is not None
+        legacy_index = not index_ready and os.path.isfile(os.path.join(config.index_dir, "embeddings.index"))
         uses_openai_embeddings = config.embedding_model.startswith("openai:")
         uses_summary_model = bool(config.summary_model)
         has_openai_api_key = bool(os.getenv("OPENAI_API_KEY"))
@@ -87,12 +89,16 @@ class RuntimeService:
         if requires_openai_for_query and not has_openai_api_key:
             blockers.append("OPENAI_API_KEY is required for query and chat responses.")
         if not index_ready:
-            blockers.append("Index files are missing. Run ingest before querying.")
+            blockers.append(
+                "Legacy index is incompatible; rebuild from saved crawl results."
+                if legacy_index else "Index files are missing. Run ingest before querying."
+            )
         return {
             "config": config,
             "paths": self.projects.get_paths(project),
             "results_ready": results_ready,
             "index_ready": index_ready,
+            "legacy_index": legacy_index,
             "query_ready": index_ready and query_pipeline_available,
             "chat_ready": query_pipeline_available,
             "capabilities": {
