@@ -64,17 +64,17 @@ class QueryPipeline:
         self.retrieval_mode = retrieval_mode
         self.builder_max_rounds = max(0, int(builder_max_rounds))
         self.score_threshold = max(0.0, float(score_threshold or 0.0))
-        self.context_builder = ContextBuilderAgent(planner_llm=getattr(self.chat_agent, "chatbot", None))
+        self.context_builder = ContextBuilderAgent(
+            planner_llm=getattr(self.chat_agent, "chatbot", None),
+            max_total_tokens=getattr(self.chat_agent, "max_total_tokens", 16000),
+        )
         self.logger = logging.getLogger(self.__class__.__name__)
         self.capabilities = {
             "hybrid": enable_hybrid,
-            "graph_expansion": retrieval_mode.lower() == "classic" and enable_graph_expansion,
-            "section_expansion": retrieval_mode.lower() == "classic" and enable_section_expansion,
+            "graph_expansion": enable_graph_expansion,
+            "section_expansion": enable_section_expansion,
+            "expansion_strategy": "planner_guided" if retrieval_mode.lower() == "builder" else "automatic",
         }
-        if retrieval_mode.lower() == "builder" and (enable_graph_expansion or enable_section_expansion):
-            self.logger.warning(
-                "Builder mode does not execute graph/section expansion; capabilities report them disabled"
-            )
 
         self.retriever = QueryRetriever(
             chat_agent=self.chat_agent,
@@ -298,7 +298,10 @@ class QueryPipeline:
             if memory_context:
                 self.logger.debug(f"[builder] Memory context length: {len(memory_context)} chars")
 
-        route = self.context_builder.plan_initial_route(question=question, memory_context=memory_context)
+        route = (
+            self.context_builder.plan_initial_route(question=question, memory_context=memory_context)
+            if time.monotonic() < deadline else {}
+        )
         route_mode = str(route.get("mode") or "retrieve_new")
         standalone_query = str(route.get("standalone_query") or "").strip()
         concepts = route.get("concepts") if isinstance(route.get("concepts"), list) else []
@@ -364,112 +367,111 @@ class QueryPipeline:
             question_for_search = question
             question_for_answer = question
 
-        initial_results = self._search(question_for_search, self.top_k_first_pass, tag="initial")
-        if self.debug:
-            self.logger.debug(
-                f"[builder] Initial results ({len(initial_results)}): "
-                f"{[r.get('id') for r in initial_results]}"
-            )
+        requirements = route.get("requirements") or [question_for_search]
+        executed_queries: List[str] = []
+        searched = set()
 
-        if retry_on_empty and not initial_results and self.recrawl_fn:
-            try:
-                self.chat_agent.logger.info("[QueryPipeline] No context found. Triggering re-crawl.")
-            except AttributeError:
-                pass
+        def normalized(query):
+            return " ".join(query.split()).casefold()
+
+        def search(query, k, tag, *, retry=False):
+            if len(executed_queries) >= 4 or time.monotonic() >= deadline:
+                return []
+            key = normalized(query)
+            if not key or (key in searched and not retry):
+                return []
+            searched.add(key)
+            executed_queries.append(query)
+            return self._search(query, k, tag=tag)
+
+        saved_results = search(question_for_search, self.top_k_first_pass, "initial")
+        initial_result_count = len(saved_results)
+        if retry_on_empty and not saved_results and self.recrawl_fn and time.monotonic() < deadline:
             self.recrawl_fn()
-            initial_results = self._search(question_for_search, self.top_k_first_pass, tag="initial-after-recrawl")
+            saved_results.extend(search(
+                question_for_search, self.top_k_first_pass, "initial-after-recrawl", retry=True,
+            ))
 
-        if not initial_results:
-            answer, supported = self._fallback_payload([], question)
-            return self._finalize_result(
-                answer,
-                supported,
-                {
-                    "mode": "builder",
-                    "route_mode": route_mode,
-                    "query": question,
-                    "concepts": concepts,
-                    "initial_result_count": 0,
-                },
-            )
-
-        saved_results: List[Dict[str, Any]] = []
-        saved_results.extend(initial_results)
-
-        if not concepts:
-            concepts = self.context_builder.extract_concepts(question_for_search)
-        if self.debug:
-            self.logger.debug(f"[builder] Concepts: {concepts}")
-
-        # Minimal builder loop: request targeted searches only for missing concepts.
-        coverage = self.context_builder.coverage_report(concepts, saved_results)
-        followup_searches = 0
-        searched = {question_for_search}
-        for i in range(self.builder_max_rounds):
-            coverage = self.context_builder.coverage_report(concepts, saved_results)
-            missing = coverage.get("missing") or []
-            if self.debug:
-                self.logger.debug(
-                    f"[builder] Round {i + 1} coverage: covered={coverage.get('covered')} missing={missing}"
-                )
-            if not missing:
-                probe_context = self._assemble_context(
-                    self._combine_and_rerank(saved_results)[: self.max_results_to_consider],
-                    max_chars=self._compute_budget_chars(question),
-                )
-                if self.chat_agent._judge_answerability(question_for_answer, probe_context):
-                    break
-                # Literal concept occurrence is only a search hint, not proof
-                # that evidence supports the question (including negation).
-                missing = concepts or [question_for_search]
-            decision = self.context_builder.decide_followups(question_for_search, missing, saved_results)
-            known_ids = {str(r.get("segment_id") or r.get("id")) for r in saved_results}
-            drop_ids = set(decision.get("drop_chunk_ids") or []) & known_ids
-            if drop_ids:
-                saved_results = [
-                    r
-                    for r in saved_results
-                    if (r.get("id") or f"{r.get('url', '')}#chunk_{r.get('chunk_index', -1)}") not in drop_ids
-                ]
-            extra_queries = decision.get("queries") or []
-            if self.debug:
-                self.logger.debug(
-                    f"[builder] Round {i + 1} decision: "
-                    f"queries={extra_queries}, drop_chunk_ids={list(drop_ids)}"
-                )
-            if not extra_queries:
+        requirement_coverage = self.context_builder.missing_coverage(requirements)
+        assessment_history = []
+        new_evidence_counts = []
+        stop_reason = "round_limit"
+        no_progress = False
+        for round_index in range(self.builder_max_rounds + 1):
+            combined = self._combine_and_rerank(saved_results)[: self.max_results_to_consider]
+            context = self._assemble_context(combined, max_chars=self._compute_budget_chars(question))
+            # Coverage must describe this assembled context, never an earlier search pass.
+            requirement_coverage = self.context_builder.missing_coverage(requirements)
+            if time.monotonic() >= deadline:
+                stop_reason = "deadline"
                 break
-            for q in list(dict.fromkeys(extra_queries)):
-                if followup_searches >= 3 or q in searched:
-                    continue
-                if time.monotonic() >= deadline:
-                    break
-                saved_results.extend(self._search(q, self.top_k_second_pass, tag="builder-followup"))
-                searched.add(q)
-                followup_searches += 1
-
-        combined = self._combine_and_rerank(saved_results)[: self.max_results_to_consider]
-        context = self._assemble_context(combined, max_chars=self._compute_budget_chars(question))
-        coverage = self.context_builder.coverage_report(concepts, combined)
-        if self.debug:
-            self.logger.debug(f"[builder] Context length: {len(context)} chars")
-            self.logger.debug(
-                f"[builder] Final coverage: "
-                f"covered={coverage.get('covered')} missing={coverage.get('missing')}"
+            decision = self.context_builder.assess_evidence(
+                question=question_for_search,
+                requirements=requirements,
+                context=context,
+                evidence=self.context_tools.supplied_evidence(
+                    context, self._last_used_sources, self._last_evidence_records,
+                ),
+                hints=self.retriever.structural_hints(
+                    combined, graph=self.enable_graph_expansion, sections=self.enable_section_expansion,
+                ),
+                searched_queries=executed_queries,
+                max_total_tokens=getattr(self.chat_agent, "max_total_tokens", 16000),
             )
+            requirement_coverage = decision["coverage"]
+            assessment_history.append({"round": round_index, **decision})
+            if decision["error"]:
+                stop_reason = decision["error"]
+                break
+            if all(item["status"] == "supported" for item in requirement_coverage):
+                stop_reason = "sufficient_evidence"
+                break
+            if time.monotonic() >= deadline:
+                stop_reason = "deadline"
+                break
+            if no_progress:
+                stop_reason = "no_new_evidence"
+                break
+            if len(executed_queries) >= 4:
+                stop_reason = "search_budget"
+                break
+            if round_index == self.builder_max_rounds:
+                break
+            queries = [q for q in decision["queries"] if normalized(q) not in searched]
+            if not queries:
+                stop_reason = "no_new_queries"
+                break
+            before_ids = {r["segment_id"] for r in self._combine_and_rerank(saved_results)}
+            for query in queries:
+                if len(executed_queries) >= 4 or time.monotonic() >= deadline:
+                    break
+                saved_results.extend(search(query, self.top_k_second_pass, "builder-followup"))
+            after_ids = {r["segment_id"] for r in self._combine_and_rerank(saved_results)}
+            new_evidence_counts.append(len(after_ids - before_ids))
+            no_progress = not (after_ids - before_ids)
+
+        coverage = {
+            "covered": [item["requirement"] for item in requirement_coverage if item["status"] == "supported"],
+            "missing": [item["requirement"] for item in requirement_coverage if item["status"] != "supported"],
+        }
+        trace = {
+            "mode": "builder", "route_mode": route_mode, "query": question,
+            "concepts": concepts, "requirements": requirements, "coverage": coverage,
+            "requirement_coverage": requirement_coverage, "assessments": assessment_history,
+            "initial_result_count": initial_result_count, "combined_result_count": len(combined),
+            "executed_queries": executed_queries, "search_count": len(executed_queries),
+            "new_evidence_counts": new_evidence_counts, "stop_reason": stop_reason,
+            "capabilities": dict(self.capabilities), "expansion_strategy": "planner_guided",
+        }
+
+        if not combined:
+            answer, supported = self._fallback_payload([], question_for_answer)
+            return self._finalize_result(answer, supported, {**trace, "answer_path": "fallback"})
 
         if self.enable_answerability_check and self.chat_agent._judge_answerability(question_for_answer, context):
             return self._finalize_result(
                 *self._answer_for_context(question_for_answer, context),
-                {
-                    "mode": "builder",
-                    "route_mode": route_mode,
-                    "query": question,
-                    "concepts": concepts,
-                    "coverage": coverage,
-                    "combined_result_count": len(combined),
-                    "answer_path": "answerable",
-                },
+                {**trace, "answer_path": "answerable"},
             )
 
         if self.allow_best_effort and combined:
@@ -483,29 +485,13 @@ class QueryPipeline:
             return self._finalize_result(
                 answer,
                 supported,
-                {
-                    "mode": "builder",
-                    "route_mode": route_mode,
-                    "query": question,
-                    "concepts": concepts,
-                    "coverage": coverage,
-                    "combined_result_count": len(combined),
-                    "answer_path": "best_effort",
-                },
+                {**trace, "answer_path": "best_effort"},
             )
         answer, supported = self._fallback_payload(combined, question_for_answer)
         return self._finalize_result(
             answer,
             supported,
-            {
-                "mode": "builder",
-                "route_mode": route_mode,
-                "query": question,
-                "concepts": concepts,
-                "coverage": coverage,
-                "combined_result_count": len(combined),
-                "answer_path": "fallback",
-            },
+            {**trace, "answer_path": "fallback"},
         )
 
     # ---------------- Helpers ----------------

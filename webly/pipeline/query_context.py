@@ -57,6 +57,24 @@ class QueryContextTools:
 
         return "\n\n---\n\n".join(blocks), used_sources
 
+    def supplied_evidence(
+        self, context: str, used_sources: List[Dict[str, str]], records: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Dict[str, str]]:
+        evidence = {}
+        for source in used_sources:
+            sid = source["chunk_id"]
+            label = f"[Evidence: {sid}] (Source: {source['url']})\n"
+            start = context.find(label)
+            if start < 0:
+                continue
+            start += len(label)
+            end = context.find("\n\n---\n\n", start)
+            evidence[sid] = {
+                "original_text": records.get(sid, {}).get("original_text", ""),
+                "supplied_text": context[start:end if end >= 0 else len(context)],
+            }
+        return evidence
+
     def compute_budget_chars(self, chat_agent, *, max_context_chars: int) -> int:
         base = max(0, max_context_chars)
         chatbot = getattr(chat_agent, "chatbot", None)

@@ -33,6 +33,7 @@ class ScriptedPlanner:
     extracted_concepts: list[str] = field(default_factory=list)
     followup_payload: dict[str, list[str]] = field(default_factory=lambda: {"queries": [], "drop_chunk_ids": []})
     transform_response: str = "Transformed answer"
+    assessment_payloads: list[dict] = field(default_factory=list)
 
     def generate(self, prompt: str) -> str:
         if "Task: route the request and extract concepts." in prompt:
@@ -41,8 +42,13 @@ class ScriptedPlanner:
                     "mode": self.route_payload.get("mode", "retrieve_new"),
                     "standalone_query": self.route_payload.get("standalone_query", ""),
                     "concepts": list(self.route_payload.get("concepts", [])),
+                    "requirements": list(self.route_payload.get("requirements", [])),
                 }
             )
+        if "Task: assess evidence and plan focused searches." in prompt:
+            if self.assessment_payloads:
+                return json.dumps(self.assessment_payloads.pop(0))
+            return json.dumps({"coverage": [], "queries": list(self.followup_payload.get("queries", []))})
         if "Task: extract core concepts from user query." in prompt:
             return json.dumps({"concepts": list(self.extracted_concepts)})
         if "Task: propose minimal follow-up retrieval actions." in prompt:

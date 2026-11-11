@@ -68,15 +68,26 @@ class QueryRetriever:
                 all_results.extend(bm25_hits)
         return all_results
 
-    def collect_hints_for_rewrite(self, results: List[Dict[str, Any]]) -> List[str]:
+    def collect_hints_for_rewrite(
+        self, results: List[Dict[str, Any]], *, include_graph: bool = True, include_sections: bool = True,
+    ) -> List[str]:
         hints: List[str] = []
         for record in results[:8]:
-            if record.get("hierarchy"):
+            if include_sections and record.get("hierarchy"):
                 hints.append(" > ".join(record["hierarchy"]))
-            for incoming in record.get("metadata", {}).get("incoming_links") or []:
+            for incoming in ((record.get("metadata") or {}).get("incoming_links") or []) if include_graph else []:
                 if incoming.get("anchor_text"):
                     hints.append(incoming["anchor_text"])
         return [hint for hint in hints if hint]
+
+    def structural_hints(self, results: List[Dict[str, Any]], *, graph: bool, sections: bool) -> Dict[str, List[str]]:
+        def bounded(hints):
+            return list(dict.fromkeys(" ".join(hint.split())[:200] for hint in hints if isinstance(hint, str)))[:12]
+
+        return {
+            "anchors": bounded(self.collect_hints_for_rewrite(results, include_sections=False)) if graph else [],
+            "headings": bounded(self.collect_hints_for_rewrite(results, include_graph=False)) if sections else [],
+        }
 
     def expand_via_graph(self, question: str, seeds: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         expansions: List[Dict[str, Any]] = []

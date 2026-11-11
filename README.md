@@ -16,6 +16,8 @@ Grounding policy:
 User guide:
 - GUI usage guide: `docs/USER_GUIDE.md`
 - API service guide: `docs/API_SERVICE.md`
+- [Current retrieval logic](docs/RETRIEVAL_LOGIC.md): builder and classic flows, ranking, evidence checks, limits, and tracing
+- [Current chunking logic](docs/CHUNKING_LOGIC.md): HTML sections, word windows, embedding segments, metadata, and limitations
 
 ## What It Does
 - Crawl websites with policy controls (domains, depth, robots, URL filters)
@@ -23,7 +25,7 @@ User guide:
 - Chunk and optionally summarize content
 - Embed content and index it in FAISS
 - Retrieve, rerank, and answer user questions in Streamlit
-- Run an agentic builder retrieval mode with concept coverage checks and follow-up retrieval rounds
+- Run an agentic builder retrieval mode with evidence-based coverage checks and focused follow-up searches
 
 ## Architecture
 - `webly/project_config.py`: typed project config normalization + validation
@@ -136,6 +138,19 @@ Create/update a project in the UI, or use a config with keys like:
 - Framework default: `embedding_model = "openai:text-embedding-3-small"`
 - `retrieval_mode` (`builder` or `classic`)
 - `builder_max_rounds` (follow-up retrieval rounds for builder mode)
+
+Builder decomposes questions into answer requirements and checks the actual assembled evidence for each one.
+Its planner can use indexed headings and incoming-link anchor text to target missing information, including
+alternate searches when the first search is empty. Graph and section expansion settings control these hints;
+builder chooses searches rather than automatically expanding every result. Classic keeps its existing expansion flow.
+
+Builder allows four search invocations per question, including the initial search and any search after a recrawl.
+Increasing `builder_max_rounds` allows reassessment but does not increase that search budget. It stops when evidence
+is sufficient, no new evidence or queries remain, or its search/round budget is exhausted. The 30-second retrieval
+deadline prevents starting additional planning or searches after expiry; it is not an end-to-end request timeout.
+Trace output includes per-requirement evidence coverage, executed searches, new segment counts, expansion strategy,
+and the stop reason. Planner citations are checked against the exact supplied excerpts; semantic support still
+requires evaluation. Retrieval uses indexed content only and does not browse live pages.
 - `leave_last_k` (limit memory to the last K question/answer pairs; `0` keeps default behavior)
 - crawl controls (`max_depth`, `respect_robots`, `allow_url_patterns`, etc.)
 
