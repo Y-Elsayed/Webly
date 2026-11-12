@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM python:3.11.7-slim AS base
+FROM python:3.12-slim AS base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 curl \
@@ -7,18 +7,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY requirements.txt ./requirements.txt
-COPY webcreeper /tmp/webcreeper
+COPY webcreeper/pyproject.toml webcreeper/README.md webcreeper/LICENSE /tmp/webcreeper/
+COPY webcreeper/webcreeper /tmp/webcreeper/webcreeper
 RUN python -m pip install --upgrade pip \
- && pip install --no-cache-dir /tmp/webcreeper \
- && pip install --no-cache-dir -r requirements.txt
+ && pip install --no-cache-dir /tmp/webcreeper
 
-COPY . .
+COPY pyproject.toml MANIFEST.in README.md LICENSE NOTICE ./
+COPY webly ./webly
+COPY app.py ./app.py
+RUN pip install --no-cache-dir '.[ui]' \
+ && useradd --uid 10001 --create-home webly \
+ && mkdir -p /data /app/log \
+ && chown -R webly:webly /data /app/log
+USER webly
 
 ENV STREAMLIT_SERVER_PORT=8501 \
     STREAMLIT_SERVER_ADDRESS=0.0.0.0 \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    WEBLY_STORAGE_ROOT=/data
 
 EXPOSE 8501
 

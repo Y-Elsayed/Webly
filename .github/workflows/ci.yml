@@ -43,13 +43,15 @@ jobs:
       - name: Install build tools only
         run: python -m pip install "setuptools>=68" wheel twine
       - name: Verify Core-only wheels, then optional API/UI and required service tests
-        run: python scripts/verify_core_package.py --work-dir package-verification --extras
+        run: python scripts/verify_core_package.py --work-dir package-verification --extras --audit
       - name: Validate wheel metadata
         run: python -m twine check package-verification/wheels/*.whl
       - name: Upload package verification evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: core-package-${{ matrix.os }}-${{ matrix.python-version }}
           path: |
             package-verification/verification.json
             package-verification/wheels/*.whl
+            package-verification/profiles/*

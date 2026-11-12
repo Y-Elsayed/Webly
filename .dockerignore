@@ -17,3 +17,7 @@ websites_storage/**
 **/*.egg-info/
 issue.md
 *.local.md
+**/.env
+**/.env.*
+**/log/**
+**/*.sqlite*

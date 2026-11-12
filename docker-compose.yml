@@ -8,6 +8,10 @@ services:
       - "8501:8501"
     env_file:
       - .env
+    environment:
+      WEBLY_STORAGE_ROOT: /data
     volumes:
-      - ./websites_storage:/app/websites_storage
+      - webly-data:/data
     restart: unless-stopped
+volumes:
+  webly-data:

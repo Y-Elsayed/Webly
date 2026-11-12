@@ -19,7 +19,7 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree
 
-CRAWLER_COMMIT = "8db4429e0a2b964eca634beed249a833e8934bb0"
+CRAWLER_VERSION = "0.3.0"
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -36,7 +36,7 @@ def inspect_wheel(wheel):
             assert not any(part.startswith(".env.") or part.endswith(".local.md") for part in Path(name).parts), name
             assert name.startswith(("webly/", "webly-")), f"Unexpected top-level package: {name}"
         metadata = archive.read(next(name for name in names if name.endswith(".dist-info/METADATA"))).decode()
-        assert "Requires-Dist: webcreeper==0.2.0" in metadata
+        assert f"Requires-Dist: webcreeper=={CRAWLER_VERSION}" in metadata
         for prompt in ("context_builder_agent.txt", "webly_chat_agent_system.txt"):
             assert f"webly/chatbot/prompts/{prompt}" in names
 
@@ -47,6 +47,8 @@ def main():
     parser.add_argument(
         "--extras", action="store_true", help="Also install/test API and UI extras separately from Core"
     )
+    parser.add_argument("--allow-dirty", action="store_true", help="Development builds only; cannot certify a release")
+    parser.add_argument("--audit", action="store_true", help="Capture runtime profiles, advisory inventories and locks")
     args = parser.parse_args()
     temporary = tempfile.TemporaryDirectory(prefix="webly-package-verification-") if args.work_dir is None else None
     work = Path(temporary.name if temporary else args.work_dir).resolve()
@@ -57,25 +59,54 @@ def main():
         commit = subprocess.check_output(
             ["git", "-C", str(ROOT / "webcreeper"), "rev-parse", "HEAD"], text=True
         ).strip()
-        if commit != CRAWLER_COMMIT:
-            raise ValueError(f"Update the reviewed crawler pin before building: {commit}")
+        expected = subprocess.check_output(["git", "ls-tree", "HEAD", "webcreeper"], cwd=ROOT, text=True).split()[2]
+        if commit != expected and not args.allow_dirty:
+            raise ValueError("Crawler commit differs from the reviewed submodule pointer")
         dirty = subprocess.check_output(
-            ["git", "-C", str(ROOT / "webcreeper"), "status", "--porcelain", "--untracked-files=no"], text=True
+            ["git", "-C", str(ROOT / "webcreeper"), "status", "--porcelain", "--untracked-files=normal"], text=True
         )
-        if dirty.strip():
+        if dirty.strip() and not args.allow_dirty:
             raise ValueError("Crawler checkout is dirty; verification requires the exact pinned source")
+        core_dirty = subprocess.check_output(
+            [
+                "git",
+                "status",
+                "--porcelain",
+                "--untracked-files=normal",
+                "--",
+                "webly",
+                "pyproject.toml",
+                "MANIFEST.in",
+                "README.md",
+                "LICENSE",
+                "NOTICE",
+            ],
+            cwd=ROOT,
+            text=True,
+        )
+        if core_dirty.strip() and not args.allow_dirty:
+            raise ValueError("Core source is dirty; use --allow-dirty only for development verification")
         wheels = work / "wheels"
         wheels.mkdir()
         # Build the exact crawler commit, excluding local build output/untracked
         # files, and stage Core without stale build/lib files or client data.
         crawler_source = work / "crawler-source"
         crawler_source.mkdir()
-        crawler_archive = work / "crawler.zip"
-        crawler_archive.write_bytes(
-            subprocess.check_output(["git", "-C", str(ROOT / "webcreeper"), "archive", "--format=zip", "HEAD"])
-        )
-        with zipfile.ZipFile(crawler_archive) as archive:
-            archive.extractall(crawler_source)
+        if args.allow_dirty:
+            for name in ("pyproject.toml", "README.md", "LICENSE"):
+                shutil.copy2(ROOT / "webcreeper" / name, crawler_source / name)
+            shutil.copytree(
+                ROOT / "webcreeper" / "webcreeper",
+                crawler_source / "webcreeper",
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.log", ".env", ".env.*"),
+            )
+        else:
+            crawler_archive = work / "crawler.zip"
+            crawler_archive.write_bytes(
+                subprocess.check_output(["git", "-C", str(ROOT / "webcreeper"), "archive", "--format=zip", "HEAD"])
+            )
+            with zipfile.ZipFile(crawler_archive) as archive:
+                archive.extractall(crawler_source)
         core_source = work / "core-source"
         core_source.mkdir()
         for name in ("pyproject.toml", "MANIFEST.in", "README.md", "LICENSE", "NOTICE"):
@@ -118,6 +149,17 @@ def main():
         run(python, "-m", "pip", "install", "--find-links", wheels, crawler_wheel, wheel, cwd=work, env=env)
         run(python, "-m", "pip", "check", cwd=work, env=env)
         run(python, "-I", ROOT / "scripts/core_package_smoke.py", cwd=work, env=env)
+        profiles = work / "profiles"
+        profiles.mkdir()
+        run(
+            python,
+            "-I",
+            ROOT / "scripts/profile_dependencies.py",
+            "--output",
+            profiles / "core.json",
+            cwd=work,
+            env=env,
+        )
         core_dependencies = subprocess.check_output(
             [str(python), "-m", "pip", "list", "--format=freeze"], cwd=work, env=env, text=True
         ).splitlines()
@@ -149,12 +191,40 @@ def main():
             cases = ElementTree.parse(junit).findall(".//testcase")
             assert cases and all(case.find("skipped") is None for case in cases), "Service tests must run without skips"
             service_test_count = len(cases)
+            run(
+                python,
+                "-I",
+                ROOT / "scripts/profile_dependencies.py",
+                "--extras",
+                "api,ui",
+                "--output",
+                profiles / "api-ui.json",
+                cwd=work,
+                env=env,
+            )
         freeze = subprocess.check_output(
             [str(python), "-m", "pip", "list", "--format=freeze"], cwd=work, env=env, text=True
         )
         report = {
+            "release_ready": False,
+            "artifact_checks_passed": True,
+            "source_clean": not (dirty.strip() or core_dirty.strip()),
+            "remaining_release_gates": ["source_review", "dependency_triage", "human_and_live_quality_evaluation"],
             "python": sys.version,
             "crawler_commit": commit,
+            "crawler_dirty": bool(dirty.strip()),
+            "source_digests": {
+                directory.name: hashlib.sha256(
+                    b"".join(
+                        str(file.relative_to(directory)).replace("\\", "/").encode() + file.read_bytes()
+                        for file in sorted(directory.rglob("*"))
+                        if file.is_file()
+                        and "build" not in file.parts
+                        and not any(part.endswith(".egg-info") for part in file.parts)
+                    )
+                ).hexdigest()
+                for directory in (core_source, crawler_source)
+            },
             "core_contract": "passed",
             "adapter_checks": "passed" if args.extras else "not_requested",
             "service_tests_passed": service_test_count,
@@ -163,6 +233,20 @@ def main():
             "resolved_dependencies": freeze.splitlines(),
         }
         (work / "verification.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+        if args.audit:
+            for profile in list(profiles.glob("*.json")):
+                run(
+                    sys.executable,
+                    ROOT / "scripts/inspect_release.py",
+                    profile,
+                    "--output",
+                    profiles / (profile.stem + "-audit.json"),
+                    "--lock",
+                    profiles / (profile.stem + ".txt"),
+                    "--fail-on-findings",
+                    cwd=work,
+                    env=env,
+                )
         print(f"Package verification passed. Evidence: {work / 'verification.json'}", flush=True)
     finally:
         if temporary:

@@ -13,7 +13,6 @@ import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import patch
 
 OPTIONAL = {"streamlit", "fastapi", "torch", "sentence_transformers", "transformers"}
 
@@ -29,6 +28,7 @@ sys.meta_path.insert(0, RejectOptionalImports())
 
 import webcreeper  # noqa: E402
 import webly  # noqa: E402
+from webcreeper.creeper_core.safe_fetch import FetchPolicy  # noqa: E402
 from webly.vector_index.snapshots import SnapshotStore  # noqa: E402
 
 FACT = "The observatory opens every Tuesday at nine in the morning."
@@ -93,13 +93,16 @@ class FixtureModel:
             )
         raise AssertionError(f"Unexpected provider request: {prompt[:100]}")
 
+    def count_tokens(self, text):
+        return len(text.split())
+
 
 def main():
     # -I removes checkout/PYTHONPATH leakage; also verify both imports came from
     # this virtual environment rather than an editable/source installation.
     for module in (webly, webcreeper):
         assert Path(module.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()), module.__file__
-    assert importlib.metadata.version("webcreeper") == "0.2.0"
+    assert importlib.metadata.version("webcreeper") == "0.3.0"
     for name in ("streamlit", "fastapi", "torch", "sentence-transformers", "transformers"):
         try:
             importlib.metadata.distribution(name)
@@ -122,30 +125,38 @@ def main():
             config = {
                 "start_url": base_url + "/",
                 "allowed_domains": ["127.0.0.1"],
-                "output_dir": str(root / "crawl"),
-                "index_dir": str(root / "index"),
                 "respect_robots": False,
                 "crawl_entire_site": False,
                 "max_depth": 1,
                 "retrieval_mode": "classic",
                 "score_threshold": 0.0,
             }
+            providers = webly.ProviderBundle(
+                FixtureEmbedder(),
+                webly.ModelCapabilities("fixture", 8192, dimensions=4),
+                FixtureModel(),
+                webly.ModelCapabilities("fixture-chat", 128000),
+            )
+            scope = webly.ResourceScope("fixture", root / "corpus")
+            policy = FetchPolicy(allowed_networks=("127.0.0.1/32",), allowed_ports=(server.server_port,))
             with (
-                patch("webly.embedder.openai_embedder.OpenAIEmbedder", FixtureEmbedder),
-                patch("webly.runtime.ChatGPTModel", FixtureModel),
+                providers,
+                webly.build_runtime(config, resources=scope, providers=providers, fetch_policy=policy) as runtime,
             ):
-                runtime = webly.build_runtime(config, api_key="fixture-not-a-real-key")
                 ingest = runtime.run_ingest(mode="both")
                 assert ingest["indexed"], ingest
                 assert ingest["ingest_summary"]["pages_indexed"] == 2, ingest
                 assert {"/", "/visits"}.issubset(FixtureSite.seen), FixtureSite.seen
-                records = [json.loads(line) for line in (root / "crawl" / "results.jsonl").read_text().splitlines()]
+                records = [
+                    json.loads(line)
+                    for line in scope.path("runs", ingest["run_id"], "results.jsonl").read_text().splitlines()
+                ]
                 expected_urls = {base_url + "/", base_url + "/visits"}
                 assert {record["url"] for record in records} == expected_urls
 
-                reopened = webly.build_runtime(webly.ProjectConfig.from_dict(config), api_key="fixture-not-a-real-key")
+                reopened = webly.build_runtime(config, resources=scope, providers=providers)
                 assert reopened.ensure_index_loaded()
-                version = SnapshotStore(config["index_dir"]).active_version()
+                version = SnapshotStore(reopened.config.index_dir).active_version()
                 assert version
                 metadata = reopened.db.metadata
                 assert {item["url"] for item in metadata} == expected_urls
@@ -158,9 +169,11 @@ def main():
                 assert result.citations and all(c["page_url"] in expected_urls for c in result.citations)
                 assert all(c["segment_id"] in {m["segment_id"] for m in metadata} for c in result.citations)
                 assert result.to_dict()["status"] == "answered"
-                ingest_pipe, query_pipe = webly.build_pipelines(config, api_key="fixture-not-a-real-key")
+                ingest_pipe, query_pipe = webly.build_pipelines(config, resources=scope, providers=providers)
                 assert isinstance(ingest_pipe, webly.IngestPipeline)
                 assert isinstance(query_pipe, webly.QueryPipeline)
+                ingest_pipe.close()
+                reopened.close()
         finally:
             server.shutdown()
             server.server_close()
