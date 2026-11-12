@@ -1,5 +1,9 @@
 # Webly production readiness audit
 
+For the post-fix assessment, completed CI matrix, freshly reproduced gaps and
+Core/SaaS release gates, read [current Core readiness](CORE_READINESS_STATUS.md).
+This document retains the original audit trail.
+
 Audit date: 2026-11-12. Scope: the current working tree, including the uncommitted ingestion fixes, rather than only the last GitHub commit. This is an engineering assessment, not a penetration-test certification or a claim that every possible defect has been found.
 
 Follow-up: the initial package import defect A16 was subsequently addressed by the

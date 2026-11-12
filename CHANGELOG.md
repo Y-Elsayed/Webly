@@ -9,6 +9,22 @@ Webly uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Core 0.2 hardening (unreleased)
+
+- Breaking factory contract: explicit resource scope and caller-owned provider
+  bundle; Core no longer discovers credentials or accepts arbitrary artifact paths.
+- WebCreeper 0.3 shared DNS-pinned, redirect-checked public HTTP fetcher with
+  streaming byte limits and operation-wide execution budgets.
+- Immutable completed crawl runs, exact-candidate source removal approval,
+  typed publication outcomes, durable operation journals and idempotent recovery.
+- Preserved short facts, bare text, table headers, code blocks and extracted
+  offsets; model-tokenizer limits and exact visible-evidence citation validation.
+- Runtime/cache lifecycle, correlated retained usage events, backup/restore,
+  isolated wheel verification, dependency inventories and evaluation/load tooling.
+- Core 0.1 snapshots require an explicit import/rebuild into separate Core 0.2
+  storage. See [migration instructions](docs/CORE_INTEGRATION.md) and
+  [validation/release gates](docs/CORE_V2_IMPLEMENTATION.md).
+
 ## [0.1.0] — 2026-04-06
 
 Initial public release.

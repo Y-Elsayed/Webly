@@ -1,0 +1,40 @@
+{
+  "python": "3.12.7",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "synthetic": true,
+  "real_model_calls": false,
+  "capacity_claim": false,
+  "pages": 2000,
+  "segments": 20000,
+  "embedding_dimensions": 4,
+  "runtime_concurrency_policy": "serialized_per_runtime",
+  "snapshot_build_publish_s": 0.4862390999987838,
+  "cold_query_s": 0.5507714000050328,
+  "workloads": [
+    {
+      "concurrency": 1,
+      "queries": 30,
+      "p50_s": 0.08565135000026203,
+      "p95_s": 0.0918078999966383,
+      "rss_before": 150810624,
+      "rss_after": 153120768
+    },
+    {
+      "concurrency": 4,
+      "queries": 30,
+      "p50_s": 0.3882350999992923,
+      "p95_s": 0.4163016000020434,
+      "rss_before": 153133056,
+      "rss_after": 157863936
+    },
+    {
+      "concurrency": 10,
+      "queries": 30,
+      "p50_s": 0.9672204999951646,
+      "p95_s": 0.9761274999982561,
+      "rss_before": 157863936,
+      "rss_after": 168456192
+    }
+  ],
+  "sampled_peak_rss_bytes": 169234432
+}

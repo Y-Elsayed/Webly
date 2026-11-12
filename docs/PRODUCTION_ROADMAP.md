@@ -1,20 +1,30 @@
 # Webly Core production roadmap
 
+> 2026-11-13 update: the hardening batches are implemented locally. See the
+> [Core 0.2 implementation report](CORE_V2_IMPLEMENTATION.md) for completed work,
+> current validation and remaining release gates. The baseline and phase notes
+> below preserve the earlier planning context.
+
+Current assessment: [Core readiness and SaaS entry gates](CORE_READINESS_STATUS.md).
+The pushed foundation commit has now passed all eight GitHub CI jobs on
+Windows/Linux and Python 3.11/3.12; the earlier local-only status below is superseded
+by that evidence. The remaining safety, reliability and quality gates stay open.
+
 Updated: 2026-11-12 following the product boundary clarification. This repository is **Webly Core**, the reusable website ingestion and retrieval engine. A separate **Webly Chatbot Platform** will consume Core and own authentication, multi-tenancy, dashboards, configuration screens, subscriptions and billing.
 
 This roadmap supersedes the earlier combined core/SaaS launch plan. See the [boundary and integration contract](CORE_PLATFORM_BOUNDARY.md) and [audit with ownership mapping](PRODUCTION_READINESS_AUDIT.md). Work below is proposed unless explicitly marked completed. No production-readiness claim is made by documenting it.
 
 ## Current baseline
 
-Implemented locally: empty-content reporting/skips, pre-embedding exact page deduplication with source aliases, Windows snapshot fixes and runtime reload after ingest failure. A real EUI rebuild succeeded. The subsequent foundation batch repaired independent packaging, removed the duplicate crawler and path workaround, preserved URL authorities in the crawler adapter, and added isolated package verification plus Windows/Linux CI.
+Implemented and pushed: empty-content reporting/skips, pre-embedding exact page deduplication with source aliases, Windows snapshot fixes and runtime reload after ingest failure. A real EUI rebuild succeeded. The subsequent foundation batch repaired independent packaging, removed the duplicate crawler and path workaround, preserved URL authorities in the crawler adapter, and added isolated package verification plus Windows/Linux CI.
 
-Validation: **203 repository tests passed**, Ruff passed, and clean Windows/Python 3.12 wheel verification completed the real fixture crawl/index/reopen/query with optional dependencies absent. API/UI installation and **16 service tests passed without skips** against the installed wheel. Review added fault coverage so failed report publication/cleanup cannot mask an ingest error or fail successful indexing. See [verification evidence](audit/2026-11-12-core-package-verification.json) and [integration instructions](CORE_INTEGRATION.md). The new CI matrix has not been run on GitHub. Short-fact, citation, Arabic budgeting and other safety/reliability findings remain open.
+Validation: **203 repository tests passed**, Ruff passed, and clean Windows/Python 3.12 wheel verification completed the real fixture crawl/index/reopen/query with optional dependencies absent. API/UI installation and **16 service tests passed without skips** against the installed wheel. Review added fault coverage so failed report publication/cleanup cannot mask an ingest error or fail successful indexing. See [verification evidence](audit/2026-11-12-core-package-verification.json) and [integration instructions](CORE_INTEGRATION.md). All eight jobs in the Windows/Linux and Python 3.11/3.12 [GitHub CI matrix passed](https://github.com/Y-Elsayed/Webly/actions/runs/43306809716). Short-fact, citation, Arabic budgeting and other safety/reliability findings remain open.
 
 ## Phase 1 — Make Core independently installable and usable
 
 Audit: A05, A06, A16; interface aspects of A18.
 
-Status: the agreed first packaging/integration batch is complete locally. This broader phase remains open for explicit environment/resource policies, dependency locking/advisory triage, typed errors and full deployment storage fixes. Package verification alone does not satisfy all production gates below.
+Status: the agreed first packaging/integration batch is committed, pushed and CI-verified. This broader phase remains open for explicit environment/resource policies, dependency locking/advisory triage, typed errors and full deployment storage fixes. Package verification alone does not satisfy all production gates below.
 
 - Repair crawler distribution/import ownership and remove the unused duplicate implementation after compatibility review.
 - Define the supported Python API and typed configuration/results/errors. Keep UI/service adapters optional; Core must run without Streamlit, FastAPI, a SaaS database or user accounts.

@@ -10,9 +10,9 @@ Webly answers questions using content already stored in a project's index. Both 
 | --- | --- | --- |
 | Understand the request | An LLM routes the request and identifies answer requirements | Combines the question with any supplied conversation memory |
 | First search | Uses the question or a standalone follow-up query | Uses the question plus memory |
-| Find more evidence | Assesses missing information and proposes focused searches using structural hints | Automatically expands using anchors/headings, then optionally rewrites the query |
-| Retrieval limits | Four search invocations total; configurable follow-up rounds | Two rewrite hops and three rewrite searches; expansion searches are additional |
-| Finish | Runs the final answerability check, then grounded generation or fallback | Checks answerability after the initial expansion and after rewrite hops, then generates or falls back |
+| Find more evidence | Assesses missing information and proposes focused searches using structural hints | Judges initial evidence, expands using anchors/headings if needed, then optionally rewrites |
+| Retrieval limits | Four controller searches; shared operation limits also apply | Two rewrite hops and three rewrite searches; all expansion searches share the operation cap |
+| Finish | Runs the final answerability check, then grounded generation or fallback | Checks initial evidence, expansion and rewrite hops, then generates or falls back |
 
 ```text
 Question + optional conversation memory
@@ -69,7 +69,7 @@ The fusion score is:
 fusion_score(segment) = sum(1 / (60 + best_rank))
 ```
 
-Ranks start at one. The implementation retains the best rank for each **search-origin tag and channel** pair, such as `initial:semantic` or `builder-followup-bm25:lexical`. Additional queries sharing an origin tag do not receive independent fusion votes for the same segment/channel. Candidates sort by descending fusion score, then segment ID for ties.
+Ranks start at one. The implementation retains the best rank for each search query, origin tag and channel. A hashed query identity distinguishes different follow-ups sharing an origin. Candidates sort by descending fusion score, then segment ID for ties.
 
 This is rank fusion, not an LLM or cross-encoder reranker. The current ranking does not explicitly optimize subquestion coverage or source diversity. The `anchor_boost` and `section_boost` parameters remain accepted and stored, but the current fusion formula does not apply those numeric boosts.
 
@@ -129,13 +129,13 @@ The loop can stop for these reasons:
 | `search_budget` | Four searches have been executed |
 | `no_new_queries` | No proposed query remains after filtering tried queries |
 | `no_new_evidence` | The preceding follow-up batch added no segment IDs |
-| `deadline` | The 30-second retrieval scheduling deadline has expired |
+| `deadline` | The remaining operation scheduling deadline has expired |
 | `planner_unavailable` | No planner model is attached |
 | `planner_failure` | A planner call or response parsing raised an exception |
 | `invalid_assessment` | Assessment JSON or its required structure is invalid |
 | `prompt_budget` | The conservative planner prompt preflight exceeds its budget |
 
-The deadline starts before routing and is checked before planning and searches. It does not interrupt an operation already running, and final answerability/generation can continue afterward. It is not an end-to-end timeout.
+Runtime-mediated retrieval uses the operation's remaining deadline. Provider wrappers check it before and after calls; built-in SDK adapters receive bounded timeouts. Arbitrary injected blocking clients must honor the timeout contract themselves. Direct pipeline calls without an operation retain the legacy 30-second scheduling fallback and do not provide the full runtime contract.
 
 After retrieval stops, builder still runs the final answerability check when enabled. A retrieval stop reason describes the search controller, not the final answer's support status.
 
@@ -143,7 +143,7 @@ After retrieval stops, builder still runs the final answerability check when ena
 
 Classic prepends supplied memory to the search question and includes it when answering. It searches first and, if configured, retries after an empty result using `recrawl_fn`. If results remain empty, it returns a fallback immediately; it does not try query rewrites to rescue that case.
 
-When initial results exist, classic performs enabled structural expansion before its first answerability check:
+When initial results exist, classic checks answerability first. If insufficient, it performs enabled structural expansion:
 
 - **Graph/anchor expansion:** inspects up to 12 seed results and five incoming links per seed. It searches `anchor text + question`, requesting three vector hits per query, plus BM25 hits when enabled.
 - **Section expansion:** inspects up to 10 seed results and searches `question + top-level heading`, with the same three-vector-hit request.
@@ -152,7 +152,7 @@ These are additional indexed searches. They do not fetch the linked page or dire
 
 If the assembled context is judged sufficient, classic generates an answer. Otherwise, with `enable_rewrite=True`, it runs up to two rewrite hops. The LLM receives the search question plus heading/anchor hints and can return several subqueries. The pipeline runs at most three rewrite searches across both hops, expands their results when configured, merges candidates, and checks answerability again.
 
-The three-rewrite limit excludes initial, recrawl, graph, and section searches. Classic has no equivalent to builder's global four-search budget or 30-second retrieval deadline. Its tried-query comparison also uses exact strings rather than builder's normalized comparison.
+The controller's three-rewrite limit excludes initial, recrawl, graph and section searches, but the shared operation search cap includes all of them. Runtime defaults permit four searches total. Its tried-query comparison uses exact strings rather than builder's normalized comparison.
 
 ## 6. Context, answerability, and final answers
 
@@ -166,7 +166,7 @@ The default character ceiling is 12,000. When a model context window is known, t
 
 ### Judge answerability
 
-The standard chat agent asks the LLM whether the context fully answers the question, using a preview of the first 6,000 context characters. Exceptions in this probe produce a negative result.
+The standard chat agent asks the LLM whether the assembled context fully answers the question. It no longer truncates this check to the first 6,000 characters. Ordinary probe failures produce a negative result; Core budget/cancellation failures propagate.
 
 This check is separate from builder's requirement assessment. Disabling `enable_answerability_check` skips the final/early answerability branches; it does not disable builder's evidence assessment or follow-up planning.
 
@@ -174,11 +174,11 @@ This check is separate from builder's requirement assessment. Disabling `enable_
 
 With the standard `WeblyChatAgent`, generation requests structured JSON containing an answer, status, citations, and missing information. Status is `answered`, `partially_answered`, or `unsupported`.
 
-Validation checks the response shape, permitted source IDs, nonempty exact excerpts in the supplied context and cited original segment, and at least one citation for a supported answer. A partial answer must name missing information. An unsupported result returns an abstention message. Invalid output receives one repair attempt, then an unsupported fallback.
+Validation checks the response shape, permitted source IDs, nonempty exact excerpts in that ID's supplied text and original segment, and at least one citation for a supported answer. A quote visible only under another ID is rejected. A partial answer must name missing information. Invalid output receives one budgeted repair attempt, then an unsupported fallback.
 
 `supported=True` covers both `answered` and `partially_answered`; it does not mean that every part of the question was answered. Citation membership checks also do not prove that every generated claim follows from its cited excerpt.
 
-Builder planner preflight counts UTF-8 bytes plus framing and a 2,048-token output reserve against the smaller of the model window and the chat agent's total-token budget, normally 16,000. Grounded answering uses a similar byte-based preflight with its own output reserve. These conservative checks can reject a prompt that would fit an exact tokenizer. Oversized planner input stops planning; it is not automatically shortened and retried. The answer repair path appends a repair instruction without repeating the original preflight.
+Core providers supply actual token counters. Planner and grounded-answer preflights include output/framing reserves; byte counting remains only for unwrapped legacy clients. Oversized final evidence is repacked in bounded steps, preserving the trusted ID/text map. Both initial and repair prompts are checked. Shared operation accounting reserves every attempt before work and protects a final-answer allowance. Builder marks an answer partial when a valid evidence assessment still has missing requirements.
 
 ### Best effort and fallback
 
@@ -200,14 +200,14 @@ Custom chat agents lacking `answer_grounded` use the legacy `answer()` / `answer
 | `allow_best_effort` | `True`; constructor option |
 | `top_k_first_pass` | Defaults to `max(chat_agent.top_k, 8)` |
 | `top_k_second_pass` | Defaults to `max(chat_agent.top_k, 10)` |
-| `max_results_to_consider` | Constructor default is 30, but implementation enforces a minimum of 40 |
+| `max_results_to_consider` | Constructor default is 30; positive explicit caps are honored exactly |
 | `max_context_chars` | `12000`; constructor option |
 
 Pipeline constructor options are not all exposed as saved project settings. The pipeline receives a `memory_context` string from its caller; it does not itself choose the chat history window.
 
 `QueryResult` includes `answer`, `supported`, `status`, `sources`, `citations`, `missing_information`, and `trace`. Builder retrieval traces additionally expose requirements, per-requirement coverage, assessments by round, executed queries, search count, new segment counts per batch, capabilities, expansion strategy, and stop reason. Its compact `coverage.missing` list includes both partial and missing requirements. Memory-only transformation traces have a smaller field set.
 
-Classic records its mode, counts, and paths such as `answerable_initial`, `answerable_hop_1`, `best_effort`, or `fallback`. Runtime-mediated results also include `index_version`.
+Classic records paths such as `answerable_initial`, `answerable_expanded`, `answerable_hop_1`, `best_effort`, or `fallback`. Runtime-mediated results include index version and operation usage. Debug-off runtime traces use an allowlist that excludes raw questions, evidence, assessments and queries; direct/debug pipeline traces can contain sensitive content.
 
 ## 8. Practical limits and source map
 

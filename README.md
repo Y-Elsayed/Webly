@@ -22,11 +22,15 @@ User guide:
 - [Core/platform boundary](docs/CORE_PLATFORM_BOUNDARY.md): engine responsibilities and integration with the separate chatbot SaaS
 - [Core integration and package verification](docs/CORE_INTEGRATION.md): installed dependency setup, public API and isolated checks
 - [Core production roadmap](docs/PRODUCTION_ROADMAP.md): prioritized engine fixes and production-readiness tests
+- [Current Core readiness and SaaS entry gates](docs/CORE_READINESS_STATUS.md): verified capabilities, reproduced gaps and the remaining release work
+- [Core 0.2 implementation and release gates](docs/CORE_V2_IMPLEMENTATION.md): implemented hardening, measured evidence and remaining external validation
 
 Indexing skips and reports pages with no extractable content and merges identical cleaned pages before embedding.
 The Run tab shows indexed/skipped/duplicate counts; `ingest_report.json` beside the crawl results lists skipped URLs
 and canonical source aliases. Rebuild with **Index only** to apply this to saved crawls. Malformed records, extraction
-exceptions, embedding failures, and publication errors still abort the build, preserving the previous active snapshot.
+exceptions and embedding failures abort before publication, preserving the previous active snapshot.
+Publication errors expose a typed committed/uncertain outcome and snapshot ID. Stable operation IDs support
+replay and recovery after worker failure. Inspect the outcome before retrying.
 
 ## What It Does
 - Crawl websites with policy controls (domains, depth, robots, URL filters)
@@ -49,7 +53,7 @@ exceptions, embedding failures, and publication errors still abort the build, pr
 - `webly/storage/`: repository-backed project/chat persistence
 
 ## Framework Quick Start
-Python `3.11.7` is recommended.
+Use Python 3.11 or 3.12.
 
 ```bash
 git submodule update --init --recursive
@@ -64,7 +68,7 @@ Repository bootstrap:
 git submodule update --init --recursive
 ```
 
-WebCreeper is a separate installed dependency (`webcreeper==0.2.0`), not bundled
+WebCreeper is a separate installed dependency (`webcreeper==0.3.0`), not bundled
 inside Core. Install it from the pinned submodule when developing; Core does not
 modify `sys.path` to discover sibling source directories. For wheel-based use,
 install both verified wheels as described in [Core integration](docs/CORE_INTEGRATION.md).
@@ -85,18 +89,25 @@ Use:
 
 Minimal framework usage:
 ```python
-from webly import build_runtime
+from pathlib import Path
+from webly import ResourceScope, build_runtime
 
-runtime = build_runtime({
-    "start_url": "https://example.com/docs",
-    "output_dir": "./data/example",
-    "index_dir": "./data/example/index",
-})
+runtime = build_runtime(
+    {"start_url": "https://example.com/docs"},
+    resources=ResourceScope("example-docs", Path("./data/example")),
+    providers=my_provider_bundle,  # explicit clients and model capabilities
+)
 
 runtime.run_ingest(mode="both")
 answer = runtime.query("What does this site document?")
 result = runtime.query_result("What does this site document?")
+runtime.close()
 ```
+
+See [Core integration](docs/CORE_INTEGRATION.md) for provider setup, limits, immutable
+run selection, refresh approval and migration from the older API. Core 0.2 is a
+breaking change. Reference applications discover credentials in their application
+adapter; the Core factory does not read `.env`.
 
 Windows PowerShell alternative for `.env`:
 ```powershell

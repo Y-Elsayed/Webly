@@ -1,0 +1,19 @@
+{
+  "baseline_commit": "2b7e890de153595aaf4779c3360c0cc12c70626f",
+  "scope": "Temporary data, fake providers, no crawler/provider network requests",
+  "short_fact_lost": true,
+  "loopback_allowed_by_crawl_policy_without_fetching": true,
+  "global_page_cap_setting_present": false,
+  "different_link_targets_classified_as_duplicate": true,
+  "citation_accepted_under_wrong_visible_id": true,
+  "requested_result_cap": 3,
+  "effective_result_cap": 40,
+  "pending_tokens_after_failed_usage_flush": 0,
+  "runtime_repr_exposes_key": true,
+  "post_pointer_sync_failure": {
+    "publish_raised": true,
+    "active_version_changed": true,
+    "active_snapshot_valid": true
+  },
+  "index_only_publishes_marked_incomplete_crawl": true
+}
