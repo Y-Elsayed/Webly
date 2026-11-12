@@ -2,6 +2,9 @@ from webcreeper.creeper_core.base_agent import BaseAgent
 
 
 class DummyAgent(BaseAgent):
+    def __init__(self, settings):
+        super().__init__({"respect_robots": False, **settings})
+
     def crawl(self):
         raise NotImplementedError
 

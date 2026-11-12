@@ -9,10 +9,12 @@ import shutil
 import tempfile
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
-from filelock import FileLock
+from filelock import FileLock, Timeout
 
+from webly.contracts import OperationOutcome, PublicationConflict, PublicationUncertain, current_operation
 from webly.vector_index.faiss_db import FaissDatabase
 
 
@@ -20,11 +22,58 @@ class SnapshotStore:
     def __init__(self, root: str | Path):
         self.root = Path(root)
 
+    @contextmanager
+    def _publication_lock(self):
+        context = current_operation()
+        lock = FileLock(str(self.root / ".publish.lock"))
+        try:
+            lock.acquire(timeout=max(0.001, context.remaining) if context else 30)
+        except Timeout:
+            if context:
+                context.check()
+            raise PublicationConflict("Snapshot publication is busy") from None
+        try:
+            if context:
+                context.check()
+            yield
+        finally:
+            lock.release()
+
+    def _activate(self, version):
+        context = current_operation()
+        if context:
+            context.check()
+        try:
+            self._write_pointer(version)
+        except Exception:
+            if self.active_version() == version:
+                outcome = OperationOutcome("uncertain", version, context.operation_id if context else None)
+                if context:
+                    context.outcome = outcome
+                raise PublicationUncertain(
+                    "Snapshot is active; directory durability is uncertain",
+                    operation_id=outcome.operation_id,
+                    outcome=outcome,
+                ) from None
+            raise
+        if context:
+            context.outcome = OperationOutcome("committed", version, context.operation_id)
+
     def active_version(self) -> str | None:
         pointer = self.root / "active.json"
         if not pointer.exists():
             return None
-        data = json.loads(pointer.read_text(encoding="utf-8"))
+        for attempt in range(10):
+            try:
+                data = json.loads(pointer.read_text(encoding="utf-8"))
+                break
+            except PermissionError as exc:
+                if getattr(exc, "winerror", None) not in {5, 32} or attempt == 9:
+                    raise
+                context = current_operation()
+                if context:
+                    context.check()
+                time.sleep(min(0.01 * (attempt + 1), context.remaining) if context else 0.01 * (attempt + 1))
         version = data.get("version")
         if not isinstance(version, str) or not version or Path(version).name != version:
             raise RuntimeError("Invalid active snapshot pointer")
@@ -56,10 +105,10 @@ class SnapshotStore:
         finally:
             os.close(descriptor)
 
-    def validate(self, version: str, *, embedding_space: dict | None = None) -> Path:
+    def validate(self, version: str, *, embedding_space: dict | None = None, load_db: bool = False):
         path = self.version_path(version)
         manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
-        if manifest.get("format") != 1 or manifest.get("version") != version:
+        if manifest.get("format") != 2 or manifest.get("version") != version:
             raise RuntimeError("Incompatible snapshot manifest")
         if embedding_space is not None and manifest.get("embedding_space") != embedding_space:
             raise RuntimeError("Embedding space mismatch; rebuild required")
@@ -72,7 +121,7 @@ class SnapshotStore:
         db = FaissDatabase(str(path), embedding_space=embedding_space)
         if db.index.ntotal != manifest["segment_count"]:
             raise RuntimeError("Snapshot segment count mismatch")
-        return path
+        return db if load_db else path
 
     def publish(
         self,
@@ -81,14 +130,14 @@ class SnapshotStore:
         source_path: str | None = None,
         expected_source_digest: str | None = None,
         expected_version: str | None = None,
+        metadata: dict | None = None,
     ) -> str:
         self.root.mkdir(parents=True, exist_ok=True)
         versions = self.root / "versions"
         versions.mkdir(exist_ok=True)
-        lock_path = self.root / ".publish.lock"
-        with FileLock(str(lock_path)):
+        with self._publication_lock():
             if self.active_version() != expected_version:
-                raise RuntimeError("Active snapshot changed during build")
+                raise PublicationConflict("Active snapshot changed during build")
             version = uuid.uuid4().hex
             staging = Path(tempfile.mkdtemp(prefix=".staging-", dir=versions))
             try:
@@ -105,11 +154,13 @@ class SnapshotStore:
                         files.append("graph.json")
                 checksums = {name: self._digest(staging / name) for name in files}
                 manifest = {
-                    "format": 1,
+                    "format": 2,
                     "version": version,
                     "embedding_space": db.embedding_space,
                     "segment_count": db.index.ntotal,
                     "checksums": checksums,
+                    "publication": metadata or {},
+                    "operation_id": current_operation().operation_id if current_operation() else None,
                 }
                 with (staging / "manifest.json").open("w", encoding="utf-8") as stream:
                     json.dump(manifest, stream, sort_keys=True)
@@ -123,18 +174,18 @@ class SnapshotStore:
                 os.replace(staging, final)
                 self._sync_directory(versions)
                 self.validate(version, embedding_space=db.embedding_space)
-                self._write_pointer(version)
+                self._activate(version)
                 return version
             finally:
                 if staging.exists():
                     shutil.rmtree(staging)
 
     def rollback(self, version: str, *, expected_version: str, embedding_space: dict | None = None) -> None:
-        with FileLock(str(self.root / ".publish.lock")):
+        with self._publication_lock():
             if self.active_version() != expected_version:
-                raise RuntimeError("Active snapshot changed before rollback")
+                raise PublicationConflict("Active snapshot changed before rollback")
             self.validate(version, embedding_space=embedding_space)
-            self._write_pointer(version)
+            self._activate(version)
 
     def _write_pointer(self, version: str) -> None:
         descriptor, temporary = tempfile.mkstemp(prefix=".active-", dir=self.root)

@@ -41,6 +41,7 @@ class SemanticPageProcessor:
                 "id": ch.get("id"),  # deterministic id for graph joins
                 "start_word": ch.get("start_word"),
                 "end_word": ch.get("end_word"),
+                "blocks": ch.get("blocks", []),
             }
             for i, ch in enumerate(chunks)
         ]

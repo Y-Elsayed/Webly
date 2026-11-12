@@ -1,6 +1,7 @@
 import sys
 import types
 
+from webly import ModelCapabilities, ProviderBundle, ResourceScope
 from webly.project_config import ProjectConfig
 from webly.query_result import QueryResult
 from webly.runtime import ProjectRuntime, build_runtime
@@ -70,6 +71,9 @@ def test_build_runtime_passes_score_threshold_to_query_pipeline(monkeypatch, tmp
     class DummyEmbedder:
         dim = 4
 
+        def count_tokens(self, text):
+            return len(text.split())
+
         def __init__(self, model_name):
             self.model_name = model_name
 
@@ -92,6 +96,9 @@ def test_build_runtime_passes_score_threshold_to_query_pipeline(monkeypatch, tmp
             self.db = kwargs["db"]
 
     class DummyChatModel:
+        def count_tokens(self, text):
+            return len(text.split())
+
         def __init__(self, api_key: str, model: str, cost_tracker=None):
             self.api_key = api_key
             self.model_name = model
@@ -112,7 +119,6 @@ def test_build_runtime_passes_score_threshold_to_query_pipeline(monkeypatch, tmp
     monkeypatch.setattr("webly.runtime.Crawler", DummyCrawler)
     monkeypatch.setattr("webly.runtime.FaissDatabase", DummyDb)
     monkeypatch.setattr("webly.runtime.IngestPipeline", DummyIngest)
-    monkeypatch.setattr("webly.runtime.ChatGPTModel", DummyChatModel)
     monkeypatch.setattr("webly.runtime.WeblyChatAgent", DummyAgent)
     monkeypatch.setattr("webly.runtime.QueryPipeline", DummyQueryPipelineCtor)
 
@@ -128,7 +134,16 @@ def test_build_runtime_passes_score_threshold_to_query_pipeline(monkeypatch, tmp
         index_dir=str(tmp_path / "out" / "index"),
     )
 
-    runtime = build_runtime(cfg, api_key="sk-test")
+    runtime = build_runtime(
+        cfg,
+        resources=ResourceScope("test", tmp_path / "core"),
+        providers=ProviderBundle(
+            DummyEmbedder("fixture"),
+            ModelCapabilities("fixture", 8192, dimensions=4),
+            DummyChatModel("dummy", "gpt-4o-mini"),
+            ModelCapabilities("gpt-4o-mini", 128000),
+        ),
+    )
 
     assert runtime.query_pipeline is not None
     assert captured["score_threshold"] == 0.72

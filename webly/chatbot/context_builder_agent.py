@@ -93,12 +93,18 @@ class ContextBuilderAgent:
             seen.add(x)
             cleaned_concepts.append(x)
         requirements = data.get("requirements")
-        requirements = list(dict.fromkeys(
-            r.strip() for r in requirements if isinstance(r, str) and r.strip() and len(r) <= 500
-        ))[:6] if isinstance(requirements, list) else []
+        requirements = (
+            list(dict.fromkeys(r.strip() for r in requirements if isinstance(r, str) and r.strip() and len(r) <= 500))[
+                :6
+            ]
+            if isinstance(requirements, list)
+            else []
+        )
         return {
-            "mode": mode, "standalone_query": standalone_query,
-            "concepts": cleaned_concepts[:6], "requirements": requirements,
+            "mode": mode,
+            "standalone_query": standalone_query,
+            "concepts": cleaned_concepts[:6],
+            "requirements": requirements,
         }
 
     def _generate_payload(self, prompt: str, max_total_tokens: int | None = None):
@@ -107,7 +113,8 @@ class ContextBuilderAgent:
         max_total_tokens = max_total_tokens if max_total_tokens is not None else self.max_total_tokens
         window = int(getattr(self.planner_llm, "context_window_tokens", 0) or 0)
         limit = min(window or max_total_tokens, max_total_tokens)
-        if len(prompt.encode("utf-8")) + 32 + 2048 > limit:
+        counter = getattr(self.planner_llm, "count_tokens", lambda text: len(text.encode("utf-8")))
+        if counter(prompt) + 32 + 2048 > limit:
             return None, "prompt_budget"
         try:
             data = self._extract_json_payload(self.planner_llm.generate(prompt) or "")
@@ -126,16 +133,22 @@ class ContextBuilderAgent:
         ]
 
     def assess_evidence(
-        self, question: str, requirements: List[str], context: str, evidence: Dict[str, Dict[str, str]],
-        hints: Dict[str, List[str]], searched_queries: List[str], max_total_tokens: int = 16000,
+        self,
+        question: str,
+        requirements: List[str],
+        context: str,
+        evidence: Dict[str, Dict[str, str]],
+        hints: Dict[str, List[str]],
+        searched_queries: List[str],
+        max_total_tokens: int = 16000,
     ) -> Dict:
         coverage = self.missing_coverage(requirements)
         prompt = (
             f"{self.prompt_text}\n\n"
             "Task: assess evidence and plan focused searches.\n"
-            "Return JSON only: {\"coverage\":[{\"requirement_index\":0,"
-            "\"status\":\"supported|partial|missing\",\"evidence\":[{\"segment_id\":\"...\","
-            "\"supporting_span\":\"exact excerpt\"}]}],\"queries\":[\"...\"]}.\n"
+            'Return JSON only: {"coverage":[{"requirement_index":0,'
+            '"status":"supported|partial|missing","evidence":[{"segment_id":"...",'
+            '"supporting_span":"exact excerpt"}]}],"queries":["..."]}.\n'
             "Assess every requirement. A mention of a topic does not answer a question about it. "
             "Account for synonyms, negation, qualifiers, dates and all parts of comparisons. "
             "Use supported only when the supplied evidence answers the entire requirement. "
@@ -154,8 +167,11 @@ class ContextBuilderAgent:
         data, error = self._generate_payload(prompt, max_total_tokens)
         if error:
             return {"coverage": coverage, "queries": [], "error": error}
-        if (set(data) - {"coverage", "queries"}
-                or not isinstance(data.get("coverage"), list) or not isinstance(data.get("queries"), list)):
+        if (
+            set(data) - {"coverage", "queries"}
+            or not isinstance(data.get("coverage"), list)
+            or not isinstance(data.get("queries"), list)
+        ):
             return {"coverage": coverage, "queries": [], "error": "invalid_assessment"}
         seen = set()
         for item in data["coverage"]:
@@ -164,9 +180,14 @@ class ContextBuilderAgent:
             index = item.get("requirement_index")
             status = item.get("status")
             citations = item.get("evidence")
-            if (type(index) is not int or not 0 <= index < len(requirements) or index in seen
-                    or not isinstance(status, str) or status not in {"supported", "partial", "missing"}
-                    or not isinstance(citations, list)):
+            if (
+                type(index) is not int
+                or not 0 <= index < len(requirements)
+                or index in seen
+                or not isinstance(status, str)
+                or status not in {"supported", "partial", "missing"}
+                or not isinstance(citations, list)
+            ):
                 return {"coverage": self.missing_coverage(requirements), "queries": [], "error": "invalid_assessment"}
             seen.add(index)
             verified = []
@@ -177,16 +198,23 @@ class ContextBuilderAgent:
                     break
                 sid, span = citation.get("segment_id"), citation.get("supporting_span")
                 source = evidence.get(sid) if isinstance(sid, str) else None
-                if (source is None or not isinstance(span, str) or not span.strip()
-                        or span not in source["original_text"] or span not in source["supplied_text"]):
+                if (
+                    source is None
+                    or not isinstance(span, str)
+                    or not span.strip()
+                    or span not in source["original_text"]
+                    or span not in source["supplied_text"]
+                ):
                     invalid = True
                     break
                 verified.append({"segment_id": sid, "supporting_span": span})
             if status != "missing" and verified and not invalid:
                 coverage[index] = {**coverage[index], "status": status, "evidence": verified}
-        queries = list(dict.fromkeys(
-            " ".join(q.split()) for q in data["queries"] if isinstance(q, str) and q.strip() and len(q) <= 300
-        ))[:3]
+        queries = list(
+            dict.fromkeys(
+                " ".join(q.split()) for q in data["queries"] if isinstance(q, str) and q.strip() and len(q) <= 300
+            )
+        )[:3]
         return {"coverage": coverage, "queries": queries, "error": None}
 
     def extract_concepts(self, question: str) -> List[str]:
@@ -256,8 +284,8 @@ class ContextBuilderAgent:
 
         queries = data.get("queries") if isinstance(data.get("queries"), list) else []
         drop_ids = data.get("drop_chunk_ids") if isinstance(data.get("drop_chunk_ids"), list) else []
-        queries = list(dict.fromkeys(
-            q.strip() for q in queries if isinstance(q, str) and q.strip() and len(q) <= 300
-        ))[:3]
+        queries = list(dict.fromkeys(q.strip() for q in queries if isinstance(q, str) and q.strip() and len(q) <= 300))[
+            :3
+        ]
         drop_ids = [d.strip() for d in drop_ids if isinstance(d, str) and d.strip()][:8]
         return {"queries": queries, "drop_chunk_ids": drop_ids}

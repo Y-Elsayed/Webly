@@ -19,7 +19,13 @@ class HFSentenceEmbedder(Embedder):
                 f"Original error: {e}"
             )
         self.dim = self.model.get_sentence_embedding_dimension()
+        self.max_input_tokens = self.model.max_seq_length
+
+    def count_tokens(self, text):
+        return len(self.model.tokenizer.encode(text, add_special_tokens=True, truncation=False))
 
     def embed(self, text: str) -> list[float]:
+        if self.count_tokens(text) > self.max_input_tokens:
+            raise ValueError("Embedding input exceeds this model's tokenizer limit")
         vec = self.model.encode(text, normalize_embeddings=True).tolist()
         return vec

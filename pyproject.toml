@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "webly"
-version = "0.1.0"
+version = "0.2.0"
 description = "Turn any website into a searchable RAG knowledge base"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -24,7 +24,7 @@ classifiers = [
 
 # Core deps — enough to run pipelines headlessly (no UI, no HuggingFace models)
 dependencies = [
-    "webcreeper==0.2.0",
+    "webcreeper==0.3.0",
     "openai>=1.84.0",
     "python-dotenv>=1.0.1",
     "requests>=2.31.0",
@@ -63,6 +63,7 @@ api = [
 ]
 # Development tools
 dev = [
+    "psutil>=6",
     "pytest>=8.3.2",
     "ruff>=0.6.9",
 ]

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 import unicodedata
-from collections import defaultdict
+from collections import Counter, defaultdict
 from logging import Logger
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+from webly.contracts import current_operation
 
 
 class QueryRetriever:
@@ -42,18 +45,20 @@ class QueryRetriever:
         queries = [query] if isinstance(query, str) else list(query)
         all_results: List[Dict[str, Any]] = []
         for q in queries:
+            operation = current_operation()
+            if operation:
+                if operation._counts.get("searches", 0) >= operation.limits.searches:
+                    return all_results
+                operation.consume("searches")
             q_emb = self.chat_agent.embedder.embed(q)
             results = self.chat_agent.vector_db.search(q_emb, top_k=k) or []
             if self.score_threshold > 0.0:
-                results = [
-                    record
-                    for record in results
-                    if float(record.get("score") or 0.0) >= self.score_threshold
-                ]
+                results = [record for record in results if float(record.get("score") or 0.0) >= self.score_threshold]
             for i, record in enumerate(results):
                 record = record.copy()
                 record["_meta_rank"] = i + 1
                 record["_origin"] = tag
+                record["_query_id"] = hashlib.sha256(q.encode()).hexdigest()[:16]
                 record["_channel"] = "semantic"
                 record["_score_vec"] = float(record.get("score") or 0.0)
                 results[i] = record
@@ -64,12 +69,17 @@ class QueryRetriever:
                 for i, record in enumerate(bm25_hits):
                     record["_meta_rank"] = i + 1
                     record["_origin"] = f"{tag}-bm25"
+                    record["_query_id"] = hashlib.sha256(q.encode()).hexdigest()[:16]
                     record["_channel"] = "lexical"
                 all_results.extend(bm25_hits)
         return all_results
 
     def collect_hints_for_rewrite(
-        self, results: List[Dict[str, Any]], *, include_graph: bool = True, include_sections: bool = True,
+        self,
+        results: List[Dict[str, Any]],
+        *,
+        include_graph: bool = True,
+        include_sections: bool = True,
     ) -> List[str]:
         hints: List[str] = []
         for record in results[:8]:
@@ -151,7 +161,7 @@ class QueryRetriever:
                     record_id, {**record, "id": record_id, "segment_id": record_id, "channel_ranks": {}}
                 )
                 ranks = entry["channel_ranks"]
-                key = f"{origin}:{channel}"
+                key = f"{origin}:{channel}:{record.get('_query_id', 'legacy')}"
                 ranks[key] = min(rank, ranks.get(key, rank))
                 if channel == "lexical":
                     entry["_score_bm25"] = max(
@@ -187,6 +197,7 @@ class QueryRetriever:
             doc_ids.append(record)
 
         self._bm25_docs = docs
+        self._bm25_tf = [Counter(doc) for doc in docs]
         self._bm25_doc_ids = doc_ids
         if not docs:
             self._bm25_ready = True
@@ -201,10 +212,7 @@ class QueryRetriever:
         self._bm25_df = df
         self._bm25_avgdl = total_len / max(len(docs), 1)
         n_docs = len(docs)
-        self._bm25_idf = {
-            token: math.log(1 + (n_docs - freq + 0.5) / (freq + 0.5))
-            for token, freq in df.items()
-        }
+        self._bm25_idf = {token: math.log(1 + (n_docs - freq + 0.5) / (freq + 0.5)) for token, freq in df.items()}
         self._bm25_ready = True
 
     def _bm25_search(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
@@ -219,17 +227,13 @@ class QueryRetriever:
         scores = []
         for index, doc in enumerate(self._bm25_docs):
             doc_len = len(doc)
-            tf = defaultdict(int)
-            for token in doc:
-                tf[token] += 1
+            tf = self._bm25_tf[index]
             score = 0.0
             for token in query_terms:
                 if token not in tf:
                     continue
                 idf = self._bm25_idf.get(token, 0.0)
-                denom = tf[token] + self._bm25_k1 * (
-                    1 - self._bm25_b + self._bm25_b * (doc_len / self._bm25_avgdl)
-                )
+                denom = tf[token] + self._bm25_k1 * (1 - self._bm25_b + self._bm25_b * (doc_len / self._bm25_avgdl))
                 score += idf * (tf[token] * (self._bm25_k1 + 1) / denom)
             scores.append((score, index))
 

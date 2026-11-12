@@ -4,6 +4,8 @@ import string
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from webly.contracts import current_operation
+
 from .base_chatbot import Chatbot
 
 logger = logging.getLogger(__name__)
@@ -29,7 +31,7 @@ class WeblyChatAgent:
         default_system_prompt = self._load_default_system_prompt()
         self.system_prompt = system_prompt or default_system_prompt
 
-        default_prompt = "User: {question}\n\n" "Website Content:\n{context}"
+        default_prompt = "User: {question}\n\nWebsite Content:\n{context}"
         self.prompt_template = prompt_template or default_prompt
 
         required_fields = {"context", "question"}
@@ -73,24 +75,61 @@ class WeblyChatAgent:
     ) -> tuple[str, list[dict], str, list[str]]:
         """Generate and validate provenance. Semantic support still needs human review."""
         allowed = {str(source["chunk_id"]): source for source in sources}
+        visible = {}
+        for sid, source in allowed.items():
+            shown = source.get("supplied_text")
+            if shown is None:
+                label = f"[Evidence: {sid}] (Source: {source['url']})\n"
+                start = context.find(label)
+                if start >= 0:
+                    start += len(label)
+                    end = context.find("\n\n---\n\n", start)
+                    shown = context[start : end if end >= 0 else len(context)]
+                elif len(allowed) == 1 and "[Evidence:" not in context:
+                    shown = context
+                else:
+                    shown = ""
+            visible[sid] = shown
         if not context or not allowed:
             return "I couldn't find enough approved evidence to answer that.", [], "unsupported", []
         prompt = (
             f"{self.system_prompt.strip()}\n\n"
             f"{self.prompt_template.format(context=context, question=question)}\n\n"
-            "Return JSON only: {\"answer\":\"...\",\"status\":\"answered|partially_answered|unsupported\","
-            "\"citations\":[{\"segment_id\":\"...\",\"supporting_span\":\"exact excerpt\"}],"
-            "\"missing_information\":[\"...\"]}. "
+            'Return JSON only: {"answer":"...","status":"answered|partially_answered|unsupported",'
+            '"citations":[{"segment_id":"...","supporting_span":"exact excerpt"}],'
+            '"missing_information":["..."]}. '
             "Cite only Evidence IDs above. Copy a nonempty exact supporting span from that evidence. "
             "If support is missing, use unsupported and no factual claim."
         )
-        # Byte count is a conservative upper bound for BPE tokens and needs no
-        # tokenizer download on a fresh offline developer installation.
-        prompt_tokens = len(prompt.encode("utf-8")) + 32
+        counter = getattr(self.chatbot, "count_tokens", lambda text: len(text.encode("utf-8")))
+        prompt_tokens = counter(prompt) + 32
         window = int(getattr(self.chatbot, "context_window_tokens", 0) or 0)
-        output_reserve = max(512, min(2048, window // 8)) if window else 2048
-        if prompt_tokens + output_reserve > min(window or self.max_total_tokens, self.max_total_tokens):
+        output_reserve = min(2048, getattr(getattr(self.chatbot, "capabilities", None), "output_tokens", 2048))
+        operation = current_operation()
+        available = (
+            operation.limits.tokens - operation._counts.get("tokens", 0) if operation else 2 * self.max_total_tokens
+        )
+        maximum = min(window or self.max_total_tokens, self.max_total_tokens, available // 2) - output_reserve - 128
+        # Repack the actual presented evidence, preserving an exact shown-text
+        # map. Do not merely change a size estimate and send the old prompt.
+        for _ in range(16):
+            if prompt_tokens <= maximum:
+                break
+            visible = {sid: text[: max(0, len(text) * 3 // 4)].rsplit(" ", 1)[0] for sid, text in visible.items()}
+            compact = "\n\n---\n\n".join(
+                f"[Evidence: {sid}] (Source: {allowed[sid]['url']})\n{text}"
+                for sid, text in visible.items()
+                if text.strip()
+            )
+            if not compact:
+                break
+            prompt = prompt.replace(context, compact, 1)
+            context = compact
+            prompt_tokens = counter(prompt) + 32
+        if prompt_tokens > maximum or not any(text.strip() for text in visible.values()):
             return "I couldn't fit the evidence within the model budget.", [], "unsupported", []
+        if operation:
+            operation.phase = "final"
         for attempt in range(2):
             raw = self.chatbot.generate(prompt)
             try:
@@ -99,10 +138,13 @@ class WeblyChatAgent:
                 status = data["status"]
                 citations = data["citations"]
                 missing = data.get("missing_information", [])
-                if not isinstance(answer, str) or not answer.strip() or status not in {
-                    "answered", "partially_answered", "unsupported"
-                } or not isinstance(citations, list) or not isinstance(missing, list) or any(
-                    not isinstance(item, str) for item in missing
+                if (
+                    not isinstance(answer, str)
+                    or not answer.strip()
+                    or status not in {"answered", "partially_answered", "unsupported"}
+                    or not isinstance(citations, list)
+                    or not isinstance(missing, list)
+                    or any(not isinstance(item, str) for item in missing)
                 ):
                     raise ValueError("Invalid answer schema")
                 verified = []
@@ -110,8 +152,11 @@ class WeblyChatAgent:
                     sid = citation["segment_id"]
                     span = citation["supporting_span"]
                     if (
-                        sid not in allowed or not isinstance(span, str) or not span.strip()
-                        or span not in context or span not in allowed[sid].get("original_text", "")
+                        sid not in allowed
+                        or not isinstance(span, str)
+                        or not span.strip()
+                        or span not in visible[sid]
+                        or span not in allowed[sid].get("original_text", "")
                     ):
                         raise ValueError("Citation is not in supplied evidence")
                     verified.append({"segment_id": sid, "page_url": allowed[sid]["url"], "supporting_span": span})
@@ -125,8 +170,7 @@ class WeblyChatAgent:
             except (ValueError, TypeError, KeyError, json.JSONDecodeError):
                 if attempt == 0:
                     prompt += (
-                        "\nPrevious output failed schema/citation validation. "
-                        "Repair once using only listed evidence."
+                        "\nPrevious output failed schema/citation validation. Repair once using only listed evidence."
                     )
         return "I couldn't verify a supported answer from the available evidence.", [], "unsupported", []
 
@@ -205,7 +249,7 @@ class WeblyChatAgent:
         Quick LLM probe to check if the provided context is sufficient to answer the question.
         Returns True if the model is confident the question can be fully answered from context.
         """
-        ctx_preview = context[:6000]
+        ctx_preview = context
         probe = (
             "You are checking whether the following website context contains enough information "
             "to fully answer the question.\n"

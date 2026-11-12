@@ -49,6 +49,7 @@ class QueryContextTools:
                     "chunk_id": str(uid),
                     "url": str(url),
                     "section": str(top_level),
+                    "supplied_text": chunk_text[len(label) :],
                 }
             )
 
@@ -58,11 +59,20 @@ class QueryContextTools:
         return "\n\n---\n\n".join(blocks), used_sources
 
     def supplied_evidence(
-        self, context: str, used_sources: List[Dict[str, str]], records: Dict[str, Dict[str, Any]],
+        self,
+        context: str,
+        used_sources: List[Dict[str, str]],
+        records: Dict[str, Dict[str, Any]],
     ) -> Dict[str, Dict[str, str]]:
         evidence = {}
         for source in used_sources:
             sid = source["chunk_id"]
+            if "supplied_text" in source:
+                evidence[sid] = {
+                    "original_text": records.get(sid, {}).get("original_text", ""),
+                    "supplied_text": source["supplied_text"],
+                }
+                continue
             label = f"[Evidence: {sid}] (Source: {source['url']})\n"
             start = context.find(label)
             if start < 0:
@@ -71,7 +81,7 @@ class QueryContextTools:
             end = context.find("\n\n---\n\n", start)
             evidence[sid] = {
                 "original_text": records.get(sid, {}).get("original_text", ""),
-                "supplied_text": context[start:end if end >= 0 else len(context)],
+                "supplied_text": context[start : end if end >= 0 else len(context)],
             }
         return evidence
 

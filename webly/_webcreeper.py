@@ -4,36 +4,14 @@ import json
 import logging
 import os
 from logging import FileHandler, Formatter, StreamHandler, getLogger
-from urllib.parse import urlparse
 
 try:
-    from webcreeper.agents.atlas.atlas import Atlas as _Atlas
+    from webcreeper.agents.atlas.atlas import Atlas
 except ImportError as exc:
     raise ImportError(
-        "Webly requires the installed 'webcreeper==0.2.0' dependency. "
+        "Webly requires the installed 'webcreeper==0.3.0' dependency. "
         "For development, initialize the submodule and run 'python -m pip install ./webcreeper'."
     ) from exc
-
-
-class Atlas(_Atlas):
-    """Compatibility adapter for WebCreeper 0.2.0's authority normalization.
-
-    Its host-comparison helper also strips www/ports and must not be used to
-    rewrite the actual fetch destination. Keep upstream query/fragment rules,
-    but retain the caller's authority (including IPv6 brackets and userinfo).
-    Remove this override once the pinned dependency preserves authorities.
-    """
-
-    def _normalize_url(self, url: str) -> str:
-        if not url:
-            return url
-        parsed = urlparse(url)
-        # Do not feed an authority to the upstream host-comparison helper: it
-        # can produce an unparsable URL for bracketed IPv6 addresses as well.
-        normalized = super()._normalize_url(parsed._replace(netloc="").geturl())
-        userinfo, separator, authority = parsed.netloc.rpartition("@")
-        netloc = (userinfo + separator if separator else "") + authority.lower()
-        return urlparse(normalized)._replace(netloc=netloc).geturl()
 
 
 class JsonFormatter(logging.Formatter):
@@ -53,7 +31,7 @@ class JsonFormatter(logging.Formatter):
 
 def configure_logging(
     module_name: str,
-    log_file: str = "./log/crawler.log",
+    log_file: str | None = None,
     json_output: bool = False,
     level: int = logging.INFO,
 ):
@@ -64,7 +42,7 @@ def configure_logging(
     but Webly keeps its richer logging behavior here so upstream logger API drift
     does not break the app or tests.
     """
-    log_dir = os.path.dirname(log_file)
+    log_dir = os.path.dirname(log_file) if log_file else ""
     if log_dir and not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
@@ -79,7 +57,7 @@ def configure_logging(
         logger.addHandler(stream_handler)
 
         try:
-            file_handler = FileHandler(log_file)
+            file_handler = FileHandler(log_file) if log_file else None
         except OSError:
             file_handler = None
         if file_handler is not None:

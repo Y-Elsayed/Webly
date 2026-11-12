@@ -1,12 +1,32 @@
-﻿import logging
+import contextvars
+import logging
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from webly.chatbot.context_builder_agent import ContextBuilderAgent
+from webly.contracts import current_operation
 from webly.pipeline.query_context import QueryContextTools
 from webly.pipeline.query_response_composer import QueryResponseComposer
 from webly.pipeline.query_retriever import QueryRetriever
 from webly.query_result import QueryResult, SourceRef
+
+
+def _request_field(name, factory):
+    def get(self):
+        state = self._query_state.get()
+        if state is None:
+            state = {}
+            self._query_state.set(state)
+        return state.setdefault(name, factory())
+
+    def set_value(self, value):
+        state = self._query_state.get()
+        if state is None:
+            state = {}
+            self._query_state.set(state)
+        state[name] = value
+
+    return property(get, set_value)
 
 
 class QueryPipeline:
@@ -21,6 +41,14 @@ class QueryPipeline:
 
     Public API is unchanged. Constructor signature and .query(question, retry_on_empty) remain the same.
     """
+
+    _last_used_sources = _request_field("sources", list)
+    _last_supported = _request_field("supported", lambda: False)
+    _last_trace = _request_field("trace", dict)
+    _last_citations = _request_field("citations", list)
+    _last_evidence_records = _request_field("records", dict)
+    _last_status = _request_field("status", lambda: None)
+    _last_missing_information = _request_field("missing", list)
 
     def __init__(
         self,
@@ -43,6 +71,7 @@ class QueryPipeline:
         builder_max_rounds: int = 1,
         score_threshold: float = 0.0,
     ):
+        self._query_state = contextvars.ContextVar("webly_query_state", default=None)
         self.chat_agent = chat_agent
         self.recrawl_fn = recrawl_fn
 
@@ -56,7 +85,9 @@ class QueryPipeline:
         self.max_context_chars = max_context_chars
         self.top_k_first_pass = top_k_first_pass or max(self.chat_agent.top_k, 8)
         self.top_k_second_pass = top_k_second_pass or max(self.chat_agent.top_k, 10)
-        self.max_results_to_consider = max(max_results_to_consider, 40)
+        if not isinstance(max_results_to_consider, int) or max_results_to_consider < 1:
+            raise ValueError("max_results_to_consider must be a positive integer")
+        self.max_results_to_consider = max_results_to_consider
 
         self.anchor_boost = anchor_boost
         self.section_boost = section_boost
@@ -103,6 +134,7 @@ class QueryPipeline:
         return self.query_result(question, retry_on_empty=retry_on_empty, memory_context=memory_context).answer
 
     def query_result(self, question: str, retry_on_empty: bool = False, memory_context: str = "") -> QueryResult:
+        self._query_state.set({})
         self._last_supported = False
         self._last_trace = {}
         self._last_used_sources = []
@@ -150,6 +182,20 @@ class QueryPipeline:
         saved_results: List[Dict[str, Any]] = []
         saved_results.extend(initial_results)
 
+        # Judge the initial evidence before spending searches on expansion.
+        combined = self._combine_and_rerank(saved_results)[: self.max_results_to_consider]
+        context = self._assemble_context(combined, max_chars=self._compute_budget_chars(question))
+        if self.enable_answerability_check and self.chat_agent._judge_answerability(question_for_answer, context):
+            return self._finalize_result(
+                *self._answer_for_context(question_for_answer, context),
+                {
+                    "mode": "classic",
+                    "initial_result_count": len(initial_results),
+                    "combined_result_count": len(combined),
+                    "answer_path": "answerable_initial",
+                },
+            )
+
         # Optional expansions for the initial seeds
         seeds = list(initial_results)
         if self.enable_graph_expansion:
@@ -181,7 +227,7 @@ class QueryPipeline:
                     "retry_on_empty": retry_on_empty,
                     "initial_result_count": len(initial_results),
                     "combined_result_count": len(combined),
-                    "answer_path": "answerable_initial",
+                    "answer_path": "answerable_expanded",
                 },
             )
 
@@ -292,7 +338,8 @@ class QueryPipeline:
         )
 
     def _query_builder(self, question: str, retry_on_empty: bool = False, memory_context: str = "") -> QueryResult:
-        deadline = time.monotonic() + 30.0
+        operation = current_operation()
+        deadline = time.monotonic() + (operation.remaining if operation else 30.0)
         if self.debug:
             self.logger.debug(f"[builder] User query: {question}")
             if memory_context:
@@ -300,7 +347,8 @@ class QueryPipeline:
 
         route = (
             self.context_builder.plan_initial_route(question=question, memory_context=memory_context)
-            if time.monotonic() < deadline else {}
+            if time.monotonic() < deadline
+            else {}
         )
         route_mode = str(route.get("mode") or "retrieve_new")
         standalone_query = str(route.get("standalone_query") or "").strip()
@@ -308,8 +356,7 @@ class QueryPipeline:
 
         if self.debug:
             self.logger.debug(
-                f"[builder] Route mode={route_mode}, "
-                f"standalone_query={standalone_query}, concepts={concepts}"
+                f"[builder] Route mode={route_mode}, standalone_query={standalone_query}, concepts={concepts}"
             )
 
         if route_mode == "transform_only":
@@ -388,9 +435,14 @@ class QueryPipeline:
         initial_result_count = len(saved_results)
         if retry_on_empty and not saved_results and self.recrawl_fn and time.monotonic() < deadline:
             self.recrawl_fn()
-            saved_results.extend(search(
-                question_for_search, self.top_k_first_pass, "initial-after-recrawl", retry=True,
-            ))
+            saved_results.extend(
+                search(
+                    question_for_search,
+                    self.top_k_first_pass,
+                    "initial-after-recrawl",
+                    retry=True,
+                )
+            )
 
         requirement_coverage = self.context_builder.missing_coverage(requirements)
         assessment_history = []
@@ -410,10 +462,14 @@ class QueryPipeline:
                 requirements=requirements,
                 context=context,
                 evidence=self.context_tools.supplied_evidence(
-                    context, self._last_used_sources, self._last_evidence_records,
+                    context,
+                    self._last_used_sources,
+                    self._last_evidence_records,
                 ),
                 hints=self.retriever.structural_hints(
-                    combined, graph=self.enable_graph_expansion, sections=self.enable_section_expansion,
+                    combined,
+                    graph=self.enable_graph_expansion,
+                    sections=self.enable_section_expansion,
                 ),
                 searched_queries=executed_queries,
                 max_total_tokens=getattr(self.chat_agent, "max_total_tokens", 16000),
@@ -455,13 +511,22 @@ class QueryPipeline:
             "missing": [item["requirement"] for item in requirement_coverage if item["status"] != "supported"],
         }
         trace = {
-            "mode": "builder", "route_mode": route_mode, "query": question,
-            "concepts": concepts, "requirements": requirements, "coverage": coverage,
-            "requirement_coverage": requirement_coverage, "assessments": assessment_history,
-            "initial_result_count": initial_result_count, "combined_result_count": len(combined),
-            "executed_queries": executed_queries, "search_count": len(executed_queries),
-            "new_evidence_counts": new_evidence_counts, "stop_reason": stop_reason,
-            "capabilities": dict(self.capabilities), "expansion_strategy": "planner_guided",
+            "mode": "builder",
+            "route_mode": route_mode,
+            "query": question,
+            "concepts": concepts,
+            "requirements": requirements,
+            "coverage": coverage,
+            "requirement_coverage": requirement_coverage,
+            "assessments": assessment_history,
+            "initial_result_count": initial_result_count,
+            "combined_result_count": len(combined),
+            "executed_queries": executed_queries,
+            "search_count": len(executed_queries),
+            "new_evidence_counts": new_evidence_counts,
+            "stop_reason": stop_reason,
+            "capabilities": dict(self.capabilities),
+            "expansion_strategy": "planner_guided",
         }
 
         if not combined:
@@ -496,6 +561,15 @@ class QueryPipeline:
 
     # ---------------- Helpers ----------------
     def _finalize_result(self, answer: str, supported: bool, trace: Optional[Dict[str, Any]] = None) -> QueryResult:
+        trace = trace or {}
+        missing = (trace.get("coverage") or {}).get("missing", [])
+        if (
+            self._last_status == "answered"
+            and missing
+            and any(not assessment.get("error") for assessment in trace.get("assessments", []))
+        ):
+            self._last_status = "partially_answered"
+            self._last_missing_information = list(dict.fromkeys([*self._last_missing_information, *missing]))
         self._last_supported = bool(supported)
         self._last_trace = dict(trace or {})
         return QueryResult(
@@ -517,6 +591,11 @@ class QueryPipeline:
                 }
                 for source in self._last_used_sources
             ]
+            visible = self.context_tools.supplied_evidence(
+                context, self._last_used_sources, self._last_evidence_records
+            )
+            for source in sources:
+                source["supplied_text"] = visible.get(source["chunk_id"], {}).get("supplied_text", "")
             answer, citations, status, missing = self.chat_agent.answer_grounded(question, context, sources)
             self._last_citations = citations
             self._last_status = status
@@ -561,7 +640,8 @@ class QueryPipeline:
         self._last_used_sources = used_sources
         self._last_evidence_records = {
             str(record.get("segment_id") or record.get("id")): {
-                "original_text": record.get("original_text") or record.get("text") or ""
+                "original_text": (("[" + " > ".join(record["hierarchy"]) + "]\n") if record.get("hierarchy") else "")
+                + (record.get("original_text") or record.get("text") or "")
             }
             for record in results
         }

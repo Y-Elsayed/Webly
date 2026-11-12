@@ -29,7 +29,7 @@ class OpenAIEmbedder(Embedder):
         if not self.api_key:
             raise RuntimeError("Missing OPENAI_API_KEY environment variable or api_key argument")
 
-        self.client = OpenAI(api_key=self.api_key)
+        self.client = OpenAI(api_key=self.api_key, timeout=15.0, max_retries=0)
 
         self._cost_tracker = cost_tracker
 
@@ -37,6 +37,7 @@ class OpenAIEmbedder(Embedder):
         self._cache = None
         if cache_dir is not None:
             from .embedding_cache import EmbeddingCache
+
             self._cache = EmbeddingCache(os.path.join(cache_dir, ".embedding_cache.db"))
 
         # Dimension sizes (hardcoded since OpenAI doesn't expose this directly)
@@ -75,13 +76,13 @@ class OpenAIEmbedder(Embedder):
             except RateLimitError as e:
                 if attempt == max_retries:
                     raise
-                wait = backoff * (2 ** attempt)
+                wait = backoff * (2**attempt)
                 logger.warning(f"OpenAI rate limit hit; retrying in {wait:.1f}s (attempt {attempt + 1}): {e}")
                 time.sleep(wait)
             except (APIConnectionError, APIStatusError) as e:
                 if attempt == max_retries:
                     raise
-                wait = backoff * (2 ** attempt)
+                wait = backoff * (2**attempt)
                 logger.warning(f"OpenAI API error; retrying in {wait:.1f}s (attempt {attempt + 1}): {e}")
                 time.sleep(wait)
 
@@ -98,9 +99,7 @@ class OpenAIEmbedder(Embedder):
             if _cached is not None:
                 return _cached
 
-        resp = self._call_with_retry(
-            lambda: self.client.embeddings.create(model=self.model_name, input=text)
-        )
+        resp = self._call_with_retry(lambda: self.client.embeddings.create(model=self.model_name, input=text))
         result = resp.data[0].embedding
 
         if self._cache is not None:
@@ -110,6 +109,21 @@ class OpenAIEmbedder(Embedder):
             self._cost_tracker.record_embedding(self.model_name, resp.usage.prompt_tokens, 1)
 
         return result
+
+    def embed_with_limits(self, text, *, timeout, max_output_tokens=0):
+        from webly.providers import ProviderResponse
+
+        response = self.client.with_options(timeout=timeout, max_retries=0).embeddings.create(
+            model=self.model_name,
+            input=text,
+        )
+        value = response.data[0].embedding
+        return ProviderResponse(value, response.usage.prompt_tokens) if response.usage else value
+
+    def close(self):
+        if self._cache:
+            self._cache.close()
+        self.client.close()
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """
@@ -121,9 +135,7 @@ class OpenAIEmbedder(Embedder):
             return []
 
         if self._cache is None:
-            resp = self._call_with_retry(
-                lambda: self.client.embeddings.create(model=self.model_name, input=texts)
-            )
+            resp = self._call_with_retry(lambda: self.client.embeddings.create(model=self.model_name, input=texts))
             if self._cost_tracker is not None and resp.usage is not None:
                 self._cost_tracker.record_embedding(self.model_name, resp.usage.prompt_tokens, len(texts))
             return [item.embedding for item in resp.data]

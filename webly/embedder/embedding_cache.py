@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import threading
 from datetime import datetime, timezone
 
 
@@ -31,29 +32,47 @@ class EmbeddingCache:
         parent = os.path.dirname(db_path) or "."
         os.makedirs(parent, exist_ok=True)
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._lock = threading.RLock()
+        self._closed = False
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute(self._CREATE_SQL)
         self._conn.commit()
 
     @staticmethod
-    def make_key(text: str, model_name: str) -> str:
+    def make_key(
+        text: str,
+        model_name: str,
+        *,
+        provider="default",
+        revision="1",
+        dimensions=None,
+        preprocessing_version="blocks-v1",
+        namespace="default",
+    ) -> str:
         """Deterministic cache key for a (text, model) pair."""
-        payload = (text + "\x00" + model_name).encode("utf-8")
+        payload = json.dumps(
+            [namespace, provider, model_name, revision, dimensions, preprocessing_version, text], ensure_ascii=False
+        ).encode("utf-8")
         return hashlib.blake2b(payload, digest_size=16).hexdigest()
 
     def get(self, key: str) -> list[float] | None:
         """Return the cached vector, or None on a cache miss."""
-        cur = self._conn.execute("SELECT vector FROM embeddings WHERE key = ?", (key,))
-        row = cur.fetchone()
+        with self._lock:
+            cur = self._conn.execute("SELECT vector FROM embeddings WHERE key = ?", (key,))
+            row = cur.fetchone()
         return json.loads(row[0]) if row else None
 
     def put(self, key: str, vector: list[float]) -> None:
         """Store a vector under the given key."""
-        self._conn.execute(
-            "INSERT OR REPLACE INTO embeddings (key, vector, created_at) VALUES (?, ?, ?)",
-            (key, json.dumps(vector), datetime.now(timezone.utc).isoformat()),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO embeddings (key, vector, created_at) VALUES (?, ?, ?)",
+                (key, json.dumps(vector), datetime.now(timezone.utc).isoformat()),
+            )
+            self._conn.commit()
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            if not self._closed:
+                self._conn.close()
+                self._closed = True

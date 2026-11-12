@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from filelock import FileLock
 
 from webly._webcreeper import configure_logging
+from webly.contracts import CoreError, current_operation
 from webly.crawl.crawler import Crawler
 from webly.embedder.base_embedder import Embedder
 from webly.pipeline.embedding_text import chunk_text_for_embedding, count_tokens, hard_char_splits, max_input_tokens
@@ -87,16 +88,32 @@ class IngestPipeline:
     def _reset_ingest_report(self):
         self._report_written = False
         self.ingest_summary = {
-            "pages_total": 0, "pages_indexed": 0, "pages_skipped": 0,
-            "duplicate_pages": 0, "chunks_skipped": 0, "segments_indexed": 0,
+            "pages_total": 0,
+            "pages_indexed": 0,
+            "pages_skipped": 0,
+            "duplicate_pages": 0,
+            "chunks_skipped": 0,
+            "segments_indexed": 0,
         }
         self.ingest_report = {
-            "status": "running", "started_at": datetime.now(timezone.utc).isoformat(),
-            "summary": self.ingest_summary, "skipped_pages": [], "duplicate_pages": [],
+            "status": "running",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "summary": self.ingest_summary,
+            "skipped_pages": [],
+            "duplicate_pages": [],
         }
         self.ingest_report_path = os.path.join(
-            os.path.dirname(os.path.abspath(self._resolve_results_path())), "ingest_report.json",
+            os.path.dirname(os.path.abspath(self._resolve_results_path())),
+            "ingest_report.json",
         )
+
+    def close(self):
+        cache = getattr(self.embedder, "cache", None)
+        if cache:
+            cache.close()
+        close = getattr(self.crawler, "close", None)
+        if close:
+            close()
 
     def _write_ingest_report(self, status: str, error: str | None = None):
         self.ingest_report.update(status=status, updated_at=datetime.now(timezone.utc).isoformat())
@@ -106,7 +123,9 @@ class IngestPipeline:
         try:
             os.makedirs(os.path.dirname(self.ingest_report_path), exist_ok=True)
             descriptor, temporary = tempfile.mkstemp(
-                prefix=".ingest-report-", suffix=".json", dir=os.path.dirname(self.ingest_report_path),
+                prefix=".ingest-report-",
+                suffix=".json",
+                dir=os.path.dirname(self.ingest_report_path),
             )
             with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
                 json.dump(self.ingest_report, stream, ensure_ascii=False, indent=2)
@@ -127,8 +146,7 @@ class IngestPipeline:
     @staticmethod
     def _content_fingerprint(chunks: List[dict]) -> str:
         content = [
-            {"hierarchy": chunk.get("hierarchy", []), "text": " ".join(chunk["text"].split())}
-            for chunk in chunks
+            {"hierarchy": chunk.get("hierarchy", []), "text": " ".join(chunk["text"].split())} for chunk in chunks
         ]
         payload = json.dumps(content, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -184,6 +202,7 @@ class IngestPipeline:
         Return a dict the crawler can write directly, or None to skip.
         """
         from datetime import datetime, timezone
+
         _now = datetime.now(timezone.utc).isoformat()
 
         # dict style first
@@ -305,12 +324,20 @@ class IngestPipeline:
                     }
                 )
 
-        summary_debug_file = resources.enter_context(
-            open(self.debug_summary_path, "w", encoding="utf-8"),
-        ) if self.debug else None
-        chunk_debug_file = resources.enter_context(
-            open(self.debug_chunks_path, "w", encoding="utf-8"),
-        ) if self.debug else None
+        summary_debug_file = (
+            resources.enter_context(
+                open(self.debug_summary_path, "w", encoding="utf-8"),
+            )
+            if self.debug
+            else None
+        )
+        chunk_debug_file = (
+            resources.enter_context(
+                open(self.debug_chunks_path, "w", encoding="utf-8"),
+            )
+            if self.debug
+            else None
+        )
 
         # Stream results (compute total for progress if possible)
         total_lines = None
@@ -323,6 +350,9 @@ class IngestPipeline:
 
         with open(resolved_results, "r", encoding="utf-8") as f:
             for idx, line in enumerate(f, start=1):
+                context = current_operation()
+                if context:
+                    context.check()
                 self.ingest_summary["pages_total"] += 1
                 url = None
                 try:
@@ -345,14 +375,19 @@ class IngestPipeline:
                             self.logger.debug(f"Progress callback error: {e}")
 
                     chunks = [
-                        chunk for chunk in self.page_processor.process(url, html)
+                        chunk
+                        for chunk in self.page_processor.process(url, html)
                         if isinstance(chunk.get("text"), str) and chunk["text"].strip()
                     ]
                     if not chunks:
                         self.ingest_summary["pages_skipped"] += 1
-                        self.ingest_report["skipped_pages"].append({
-                            "url": url, "line": idx, "reason": "no_extractable_content",
-                        })
+                        self.ingest_report["skipped_pages"].append(
+                            {
+                                "url": url,
+                                "line": idx,
+                                "reason": "no_extractable_content",
+                            }
+                        )
                         self.logger.warning("Skipping crawl record on line %s (%s): no extractable content", idx, url)
                         continue
 
@@ -366,12 +401,19 @@ class IngestPipeline:
                                 aliases.append(url)
                         self.ingest_summary["duplicate_pages"] += 1
                         self.ingest_summary["chunks_skipped"] += len(chunks)
-                        self.ingest_report["duplicate_pages"].append({
-                            "url": url, "canonical_url": canonical_url, "line": idx,
-                            "chunks_skipped": len(chunks),
-                        })
+                        self.ingest_report["duplicate_pages"].append(
+                            {
+                                "url": url,
+                                "canonical_url": canonical_url,
+                                "line": idx,
+                                "chunks_skipped": len(chunks),
+                            }
+                        )
                         self.logger.info(
-                            "Skipping duplicate page %s -> %s (%s chunks)", url, canonical_url, len(chunks),
+                            "Skipping duplicate page %s -> %s (%s chunks)",
+                            url,
+                            canonical_url,
+                            len(chunks),
                         )
                         continue
 
@@ -454,6 +496,7 @@ class IngestPipeline:
                                     "seg_index": seg_idx,
                                     "seg_count": len(parts),
                                     "page_url": url,
+                                    "blocks": chunk.get("blocks", []),
                                     "source_urls": [url],
                                     "outgoing_links": outgoing_links,
                                     "incoming_links": incoming_links,
@@ -471,6 +514,8 @@ class IngestPipeline:
                 except json.JSONDecodeError as e:
                     raise RuntimeError(f"Invalid crawl record on line {idx}: malformed JSON") from e
                 except Exception as e:
+                    if isinstance(e, CoreError):
+                        raise
                     safe_url = url if isinstance(url, str) else "URL unavailable"
                     raise RuntimeError(
                         f"Failed to transform crawl record on line {idx} ({safe_url}): {self._safe_error(e)}"
@@ -504,16 +549,22 @@ class IngestPipeline:
         try:
             if isinstance(self.db, FaissDatabase):
                 store = SnapshotStore(self.index_path)
+                guard = getattr(self, "publication_guard", None)
+                if guard:
+                    guard(records, store)
                 self.published_version = store.publish(
                     self.db,
                     source_path=self._resolve_results_path(require_non_empty=True),
                     expected_source_digest=getattr(self, "_input_digest", None),
                     expected_version=getattr(self, "_expected_version", store.active_version()),
+                    metadata=getattr(self, "publication_metadata", None),
                 )
             else:
                 self.db.save(self.index_path)
             self.logger.info(f"Saved index to {self.index_path}")
         except Exception as e:
+            if isinstance(e, CoreError):
+                raise
             raise RuntimeError(f"[IngestPipeline] Failed to save index to {self.index_path}: {e}")
 
     # -------------------------------------------------------------------------
@@ -564,7 +615,8 @@ class IngestPipeline:
             resolved_before = self._resolve_results_path(require_non_empty=False)
             crawl_marker = os.path.join(getattr(self.crawler, "output_dir", "."), ".crawl_incomplete")
             need_crawl = (
-                force_crawl or os.path.exists(crawl_marker)
+                force_crawl
+                or os.path.exists(crawl_marker)
                 or not (os.path.exists(resolved_before) and os.path.getsize(resolved_before) > 0)
             )
 
@@ -637,6 +689,9 @@ class IngestPipeline:
 
         # ---------------- Index phase ----------------
         if mode in ("index_only", "both"):
+            marker = os.path.join(getattr(self.crawler, "output_dir", "."), ".crawl_incomplete")
+            if os.path.exists(marker):
+                raise RuntimeError("Cannot index an incomplete crawl")
             resolved_for_index = self._resolve_results_path(require_non_empty=False)
             if not os.path.exists(resolved_for_index) or os.path.getsize(resolved_for_index) == 0:
                 return {
@@ -654,10 +709,9 @@ class IngestPipeline:
                 self._expected_version = SnapshotStore(self.index_path).active_version()
                 records = self.transform()
                 self.load(records)
-                indexed_url_count = len({
-                    r.get("metadata", {}).get("page_url", "") for r in records
-                    if r.get("metadata")
-                })
+                indexed_url_count = len(
+                    {r.get("metadata", {}).get("page_url", "") for r in records if r.get("metadata")}
+                )
                 self._write_checkpoint("load_done", {"indexed_url_count": indexed_url_count})
                 if hasattr(self, "published_version"):
                     self.ingest_report["index_version"] = self.published_version
@@ -692,6 +746,7 @@ class IngestPipeline:
 
     def _write_checkpoint(self, stage: str, extra: dict | None = None) -> None:
         from datetime import datetime, timezone
+
         path = self._checkpoint_path()
         payload = {
             "stage": stage,

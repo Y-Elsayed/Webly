@@ -1,9 +1,4 @@
-import os
-from typing import List, Optional
-
-from dotenv import load_dotenv
-
-from webly.runtime import build_runtime
+from typing import List
 
 try:
     from typing import Required, TypedDict
@@ -128,7 +123,11 @@ except ImportError:
     PipelineConfig = dict  # type: ignore[misc,assignment]
 
 
-def build_pipelines(config: "PipelineConfig", api_key: Optional[str] = None):
-    load_dotenv()
-    runtime = build_runtime(config, api_key=api_key or os.getenv("OPENAI_API_KEY"))
+def build_pipelines(config: "PipelineConfig", *, resources, providers):
+    import warnings
+
+    from webly.runtime import build_runtime
+
+    warnings.warn("Use build_runtime as a context manager in Core 0.2", DeprecationWarning, stacklevel=2)
+    runtime = build_runtime(config, resources=resources, providers=providers)
     return runtime.ingest_pipeline, runtime.query_pipeline

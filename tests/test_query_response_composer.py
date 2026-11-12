@@ -57,5 +57,6 @@ def test_query_response_composer_fallback_returns_no_links_for_off_topic_questio
             "chunk_id": "https://docs.pydantic.dev/dev/concepts/validators/#chunk_-1",
             "url": "https://docs.pydantic.dev/dev/concepts/validators/",
             "section": "Concepts",
+            "supplied_text": "[Concepts > Validators]\nPydantic validators define field validation flow.",
         }
     ]

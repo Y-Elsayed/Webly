@@ -56,6 +56,9 @@ class ProjectConfig:
         index_dir: str | None = None,
     ) -> "ProjectConfig":
         raw = dict(data)
+        unknown = set(raw) - set(cls.__dataclass_fields__)
+        if unknown:
+            raise ValueError(f"Unknown configuration fields: {', '.join(sorted(unknown))}")
 
         emb = (raw.get("embedding_model") or "").strip()
         raw["embedding_model"] = "openai:text-embedding-3-small" if emb.lower() in {"", "default"} else emb

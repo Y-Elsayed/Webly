@@ -53,12 +53,34 @@ class ChatGPTModel(Chatbot):
             except RateLimitError as e:
                 if attempt == max_retries:
                     raise
-                wait = backoff * (2 ** attempt)
+                wait = backoff * (2**attempt)
                 logger.warning(f"OpenAI rate limit hit; retrying in {wait:.1f}s (attempt {attempt + 1}): {e}")
                 time.sleep(wait)
-            except (APIConnectionError, APIStatusError) as e:
+            except (APIConnectionError, APIStatusError):
                 if attempt == max_retries:
                     raise
-                wait = backoff * (2 ** attempt)
-                logger.warning(f"OpenAI API error; retrying in {wait:.1f}s (attempt {attempt + 1}): {e}")
-                time.sleep(wait)
+                time.sleep(backoff * (2**attempt))
+
+    def count_tokens(self, text):
+        import tiktoken
+
+        return len(tiktoken.encoding_for_model(self.model).encode(text))
+
+    def generate_with_limits(self, prompt, *, timeout, max_output_tokens):
+        from webly.providers import ProviderResponse
+
+        response = self.client.with_options(timeout=timeout, max_retries=0).chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=max_output_tokens,
+        )
+        value = response.choices[0].message.content or ""
+        return (
+            ProviderResponse(value, response.usage.prompt_tokens, response.usage.completion_tokens)
+            if response.usage
+            else value
+        )
+
+    def close(self):
+        self.client.close()

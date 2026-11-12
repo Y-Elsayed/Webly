@@ -7,9 +7,26 @@ from webly.query_result import QueryResult, SourceRef
 from webly.runtime import ProjectRuntime, build_runtime
 from webly.vector_index.faiss_db import FaissDatabase
 
+from .contracts import (
+    CoreError,
+    IngestResult,
+    OperationContext,
+    OperationLimits,
+    OperationOutcome,
+    ResourceScope,
+)
 from .framework import PipelineConfig, build_pipelines
+from .providers import ModelCapabilities, ProviderBundle
 
 __all__ = [
+    "CoreError",
+    "IngestResult",
+    "OperationContext",
+    "OperationLimits",
+    "OperationOutcome",
+    "ResourceScope",
+    "ModelCapabilities",
+    "ProviderBundle",
     "PipelineConfig",
     "ProjectConfig",
     "ProjectRuntime",

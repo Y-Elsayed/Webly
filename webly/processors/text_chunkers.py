@@ -3,7 +3,7 @@ import re
 from abc import ABC, abstractmethod
 from typing import Dict, List, Tuple
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, NavigableString, Tag
 
 
 class TextChunker(ABC):
@@ -67,7 +67,7 @@ class SlidingTextChunker(TextChunker):
     # ---------- Cleaning ----------
     def _clean_html(self, html: str) -> BeautifulSoup:
         soup = BeautifulSoup(html, "html.parser")
-        for tag in soup(["script", "style", "noscript", "form", "nav", "footer", "header", "aside"]):
+        for tag in soup(["script", "style", "noscript", "form", "nav", "footer"]):
             tag.decompose()
         return soup
 
@@ -108,6 +108,8 @@ class SlidingTextChunker(TextChunker):
         # handle tables
         if node.name == "table":
             txt = self._table_to_md(node)
+        elif node.name in {"pre", "code"}:
+            txt = "```\n" + node.get_text().strip() + "\n```"
         else:
             txt = self._text(node)
         return txt, anchors
@@ -123,25 +125,7 @@ class SlidingTextChunker(TextChunker):
         We walk headings in document order; a section spans until the next heading of same or higher level.
         """
         body = soup.body or soup
-        headings = body.find_all(self._heading_re)
         sections: List[Dict] = []
-
-        # If no headings at all, treat entire body as one section
-        if not headings:
-            blocks = []
-            # block-level nodes likely to contain meaningful text
-            for node in body.find_all(["p", "li", "pre", "code", "blockquote", "td", "table"]):
-                if any(
-                    parent.name in {"p", "li", "pre", "code", "blockquote", "td", "table"}
-                    for parent in node.parents if isinstance(parent, Tag)
-                ):
-                    continue
-                txt, anchors = self._block_text_and_anchors(node)
-                if txt and len(txt.split()) > 3:
-                    blocks.append({"text": txt, "anchors": anchors})
-            if blocks:
-                sections.append({"hierarchy": [], "blocks": blocks})
-            return sections
 
         # Build sections delimited by headings
         def level_of(tag: Tag) -> int:
@@ -152,6 +136,19 @@ class SlidingTextChunker(TextChunker):
         blocks: List[Dict] = []
         block_names = {"p", "li", "pre", "code", "blockquote", "td", "table"}
         for node in body.descendants:
+            if isinstance(node, NavigableString):
+                if any(
+                    parent.name in block_names or self._heading_re.match(parent.name or "")
+                    for parent in node.parents
+                    if isinstance(parent, Tag)
+                ):
+                    continue
+                text = str(node).strip()
+                if text:
+                    anchor = node.find_parent("a", href=True)
+                    anchors = [{"anchor_text": text, "target": anchor["href"]}] if anchor else []
+                    blocks.append({"text": text, "anchors": anchors, "kind": "text"})
+                continue
             if not isinstance(node, Tag):
                 continue
             if self._heading_re.match(node.name or ""):
@@ -167,8 +164,8 @@ class SlidingTextChunker(TextChunker):
                 if any(parent.name in block_names for parent in node.parents if isinstance(parent, Tag)):
                     continue
                 txt, anchors = self._block_text_and_anchors(node)
-                if txt and len(txt.split()) > 3:
-                    blocks.append({"text": txt, "anchors": anchors})
+                if txt:
+                    blocks.append({"text": txt, "anchors": anchors, "kind": node.name})
         if blocks:
             sections.append({"hierarchy": path[:], "blocks": blocks})
 
@@ -179,28 +176,79 @@ class SlidingTextChunker(TextChunker):
         """
         Merge consecutive blocks into chunks up to max_words with overlap, carrying anchors that fall inside.
         """
-        words: List[str] = []
-        anchors: List[Tuple[int, Dict]] = []
-        for block in blocks:
-            start = len(words)
-            words.extend(block["text"].split())
-            anchors.extend((start, anchor) for anchor in block.get("anchors", []))
         chunks: List[Dict] = []
-        step = max(1, self.max_words - min(self.overlap, self.max_words - 1))
-        for start in range(0, len(words), step):
-            end = min(start + self.max_words, len(words))
-            chunks.append({
-                "id": self._hash_id(url, hierarchy, len(chunks)),
-                "url": url,
-                "text": " ".join(words[start:end]),
-                "tokens": end - start,
-                "start_word": start,
-                "end_word": end,
-                "hierarchy": hierarchy[:],
-                "outgoing_links": [anchor for offset, anchor in anchors if start <= offset < end],
-            })
-            if end == len(words):
-                break
+        offset = 0
+        word_offset = 0
+        current = []
+        current_words = 0
+
+        def flush():
+            nonlocal current, current_words
+            if not current:
+                return
+            chunks.append(
+                {
+                    "id": self._hash_id(url, hierarchy, len(chunks)),
+                    "url": url,
+                    "text": "\n\n".join(block["text"] for block in current),
+                    "tokens": current_words,
+                    "start_word": current[0]["start_word"],
+                    "end_word": current[-1]["end_word"],
+                    "hierarchy": hierarchy[:],
+                    "blocks": [dict(block) for block in current],
+                    "outgoing_links": [anchor for block in current for anchor in block.get("anchors", [])],
+                }
+            )
+            current, current_words = [], 0
+
+        expanded = []
+        for block in blocks:
+            lines = block["text"].splitlines()
+            if block.get("kind") == "table" and len(lines) > 2:
+                for row_index, row in enumerate(lines[2:]):
+                    expanded.append({**block, "text": "\n".join([*lines[:2], row]), "row_index": row_index})
+            else:
+                expanded.append(block)
+        for index, block in enumerate(expanded):
+            text = block["text"]
+            spans = list(re.finditer(r"\S+", text))
+            step = max(1, self.max_words - min(self.overlap, self.max_words - 1))
+            starts = range(0, len(spans), step) if len(spans) > self.max_words else [0]
+            for start in starts:
+                if not spans:
+                    continue
+                end = min(start + self.max_words, len(spans))
+                begin_char, end_char = spans[start].start(), spans[end - 1].end()
+                piece = text[begin_char:end_char]
+                if block.get("kind") in {"pre", "code"}:
+                    if start:
+                        piece = "```\n" + piece
+                    if end < len(spans):
+                        piece += "\n```"
+                if block.get("kind") == "table" and start:
+                    header = "\n".join(text.splitlines()[:2])
+                    piece = header + "\n" + piece
+                if current_words + len(piece.split()) > self.max_words:
+                    flush()
+                current.append(
+                    {
+                        **block,
+                        "text": piece,
+                        "block_id": self._hash_id(url, hierarchy, index),
+                        "start_char": offset + begin_char,
+                        "end_char": offset + end_char,
+                        "offset_basis": "section_extracted_text",
+                        "start_word": word_offset + start,
+                        "end_word": word_offset + end,
+                    }
+                )
+                current_words += len(piece.split())
+                if end == len(spans):
+                    break
+                flush()
+            offset += len(text) + 2
+            word_offset += len(spans)
+        flush()
         return chunks
 
     def chunk_html(self, html: str, url: str) -> List[Dict]:

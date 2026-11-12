@@ -15,8 +15,13 @@ def test_query_context_tools_assemble_context_returns_used_sources():
     assert "Alpha" in context
     assert "Beta" in context
     assert used_sources == [
-        {"chunk_id": "a#1", "url": "https://docs.example.com/a", "section": "Core"},
-        {"chunk_id": "b#1", "url": "https://docs.example.com/b", "section": "Guides"},
+        {"chunk_id": "a#1", "url": "https://docs.example.com/a", "section": "Core", "supplied_text": "[Core]\nAlpha"},
+        {
+            "chunk_id": "b#1",
+            "url": "https://docs.example.com/b",
+            "section": "Guides",
+            "supplied_text": "[Guides]\nBeta",
+        },
     ]
 
 
