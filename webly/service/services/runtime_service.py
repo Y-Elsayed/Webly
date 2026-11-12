@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
+from webly.adapters import build_application_runtime as build_runtime
+from webly.contracts import CoreError
 from webly.query_result import QueryResult
-from webly.runtime import build_runtime
 from webly.service.errors import BadRequestError, NotFoundError, ServiceUnavailableError
 from webly.storage.project_repository import FileProjectRepository
 from webly.vector_index.snapshots import SnapshotStore
@@ -37,6 +39,8 @@ class RuntimeService:
         try:
             return build_runtime(config)
         except RuntimeError as exc:
+            if isinstance(exc, CoreError):
+                raise
             raise ServiceUnavailableError(str(exc)) from exc
 
     def query_project(
@@ -54,18 +58,30 @@ class RuntimeService:
         except FileNotFoundError as exc:
             raise ServiceUnavailableError(str(exc)) from exc
         except RuntimeError as exc:
+            if isinstance(exc, CoreError):
+                raise
             raise ServiceUnavailableError(str(exc)) from exc
+        finally:
+            close = getattr(runtime, "close", None)
+            if close:
+                close()
 
-    def run_ingest(self, project: str, *, mode: str = "both", force_crawl: bool = False) -> dict:
+    def run_ingest(self, project: str, *, mode: str = "both", force_crawl: bool = False, **kwargs) -> dict:
         status = self.status(project)
         self._require_ingest_ready(status)
         runtime = self.build_project_runtime(project)
         try:
-            return runtime.run_ingest(mode=mode, force_crawl=force_crawl)
+            return runtime.run_ingest(mode=mode, force_crawl=force_crawl, **kwargs)
         except ValueError as exc:
             raise BadRequestError(str(exc)) from exc
         except RuntimeError as exc:
+            if isinstance(exc, CoreError):
+                raise
             raise ServiceUnavailableError(str(exc)) from exc
+        finally:
+            close = getattr(runtime, "close", None)
+            if close:
+                close()
 
     def status(self, project: str) -> dict:
         safe_name = self.projects.sanitize_name(project, "project name")
@@ -74,8 +90,12 @@ class RuntimeService:
         config = self.projects.load(safe_name)
         results_path = os.path.join(config.output_dir, config.results_file)
         results_ready = os.path.exists(results_path) and os.path.getsize(results_path) > 0
-        index_ready = SnapshotStore(config.index_dir).active_version() is not None
-        legacy_index = not index_ready and os.path.isfile(os.path.join(config.index_dir, "embeddings.index"))
+        core_index = Path(config.output_dir) / "core-v2" / "index"
+        index_ready = SnapshotStore(core_index).active_version() is not None
+        legacy_index = not index_ready and (
+            os.path.isfile(os.path.join(config.index_dir, "embeddings.index"))
+            or SnapshotStore(config.index_dir).active_version() is not None
+        )
         uses_openai_embeddings = config.embedding_model.startswith("openai:")
         uses_summary_model = bool(config.summary_model)
         has_openai_api_key = bool(os.getenv("OPENAI_API_KEY"))
@@ -91,7 +111,8 @@ class RuntimeService:
         if not index_ready:
             blockers.append(
                 "Legacy index is incompatible; rebuild from saved crawl results."
-                if legacy_index else "Index files are missing. Run ingest before querying."
+                if legacy_index
+                else "Index files are missing. Run ingest before querying."
             )
         return {
             "config": config,

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from webly.contracts import CoreError
 from webly.service.dependencies import build_container
 from webly.service.errors import ServiceError
 from webly.service.routes.chats import router as chats_router
@@ -16,10 +19,24 @@ from webly.service.schemas import ErrorResponse
 def create_app(*, storage_root: str | None = None) -> FastAPI:
     app = FastAPI(
         title="Webly Service",
-        version="0.1.0",
+        version="0.2.0",
         description="Filesystem-backed local API for Webly projects and query runtime.",
     )
     app.state.container = build_container(storage_root=storage_root)
+
+    @app.exception_handler(CoreError)
+    def handle_core_error(_request: Request, exc: CoreError):
+        status = 409 if exc.code in {"publication_conflict", "publication_uncertain"} else 400
+        return JSONResponse(
+            status_code=status,
+            content={
+                "detail": str(exc),
+                "code": exc.code,
+                "retryable": exc.retryable,
+                "operation_id": exc.operation_id,
+                "outcome": asdict(exc.outcome),
+            },
+        )
 
     @app.exception_handler(ServiceError)
     def handle_service_error(_request: Request, exc: ServiceError):

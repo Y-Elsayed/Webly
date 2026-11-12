@@ -4,7 +4,7 @@ import streamlit as st
 
 _UI_DIR = os.path.dirname(os.path.abspath(__file__))
 APP_DIR = os.path.dirname(_UI_DIR)
-STORAGE_ROOT = os.path.join(APP_DIR, "websites_storage")
+STORAGE_ROOT = os.environ.get("WEBLY_STORAGE_ROOT") or os.path.join(APP_DIR, "websites_storage")
 
 EMBEDDER_OPTIONS = {
     "HuggingFace (MiniLM)": "sentence-transformers/all-MiniLM-L6-v2",

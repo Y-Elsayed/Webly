@@ -26,15 +26,23 @@ def _validate_openai_key(k: str) -> tuple[bool, str | None]:
 
 
 def _index_dir_ready(index_dir: str) -> bool:
-    if not index_dir or not os.path.isdir(index_dir):
+    from pathlib import Path
+
+    from webly.vector_index.snapshots import SnapshotStore
+
+    if not index_dir:
         return False
-    try:
-        files = os.listdir(index_dir)
-    except Exception:
-        return False
-    has_index = any(f.lower().endswith(".index") for f in files)
-    has_meta = any(f.lower().startswith("metadata") for f in files)
-    return has_index and has_meta
+    candidate = Path(index_dir).parent / "core-v2" / "index"
+    if (candidate / "active.json").is_file():
+        try:
+            store = SnapshotStore(candidate)
+            store.validate(store.active_version())
+            return True
+        except Exception:
+            return False
+    # Old indexes require explicit import/rebuild; their files do not make the
+    # Core 0.2 query runtime ready.
+    return False
 
 
 def _domain_from_url(url: str) -> str:

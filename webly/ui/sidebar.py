@@ -30,7 +30,14 @@ def render_sidebar(manager, projects: list) -> str | None:
             col_a, col_b = st.columns(2)
             with col_a:
                 if st.button("Forget key"):
+                    runtime = st.session_state.get("runtime")
+                    if runtime:
+                        runtime.close()
+                    st.session_state.runtime = None
+                    st.session_state.ingest_pipeline = None
+                    st.session_state.query_pipeline = None
                     st.session_state.user_openai_key = None
+                    st.session_state.provider_forget_requested = True
                     st.success("Key removed from this session.")
             with col_b:
                 if st.button("Rebuild pipelines"):
@@ -49,6 +56,7 @@ def render_sidebar(manager, projects: list) -> str | None:
                 ok, err = _validate_openai_key(k.strip())
                 if ok:
                     st.session_state.user_openai_key = k.strip()
+                    st.session_state.provider_forget_requested = False
                     st.success("Connected. Your key is kept only in this session.")
                 else:
                     st.error(err or "Could not validate key.")
@@ -64,12 +72,8 @@ def render_sidebar(manager, projects: list) -> str | None:
             with st.expander("Create new project", expanded=True):
                 new_name = st.text_input("Project name", key="new_project_name")
                 new_url = st.text_input("Start URL", key="new_project_url")
-                new_domains = st.text_area(
-                    "Allowed domains (comma-separated)", key="new_project_domains"
-                )
-                embed_choice = st.selectbox(
-                    "Embedding model", list(EMBEDDER_OPTIONS.keys()), key="new_embed_choice"
-                )
+                new_domains = st.text_area("Allowed domains (comma-separated)", key="new_project_domains")
+                embed_choice = st.selectbox("Embedding model", list(EMBEDDER_OPTIONS.keys()), key="new_embed_choice")
 
                 col1, col2 = st.columns(2)
                 with col1:
@@ -81,9 +85,7 @@ def render_sidebar(manager, projects: list) -> str | None:
                         else:
                             cfg = {
                                 "start_url": new_url,
-                                "allowed_domains": [
-                                    d.strip() for d in new_domains.split(",") if d.strip()
-                                ],
+                                "allowed_domains": [d.strip() for d in new_domains.split(",") if d.strip()],
                                 "embedding_model": EMBEDDER_OPTIONS[embed_choice],
                                 "chat_model": "gpt-4o-mini",
                                 "answering_mode": AnsweringMode.TECHNICAL_GROUNDED.value,
@@ -139,8 +141,7 @@ def render_sidebar(manager, projects: list) -> str | None:
             ready_idx = _index_dir_ready(cfg["index_dir"])
             ready_res = _results_file_ready(cfg["output_dir"], cfg["results_file"])
             st.caption(
-                f"Results: {'Ready' if ready_res else 'Missing'}  |  "
-                f"Index: {'Ready' if ready_idx else 'Missing'}"
+                f"Results: {'Ready' if ready_res else 'Missing'}  |  Index: {'Ready' if ready_idx else 'Missing'}"
             )
 
     return selected

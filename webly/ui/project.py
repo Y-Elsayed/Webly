@@ -1,9 +1,10 @@
+import hashlib
 import logging
 
 import streamlit as st
 
+from webly.adapters import build_application_runtime as build_runtime
 from webly.project_config import ProjectConfig
-from webly.runtime import build_runtime
 from webly.storage.chat_repository import FileChatRepository
 
 logger = logging.getLogger(__name__)
@@ -23,7 +24,7 @@ def build_memory_context(messages, max_chars: int = 2000, leave_last_k: int = 0)
     if not messages:
         return ""
     if leave_last_k and leave_last_k > 0:
-        messages = messages[-(leave_last_k * 2):]
+        messages = messages[-(leave_last_k * 2) :]
     buf = []
     total = 0
     for msg in reversed(messages):
@@ -57,6 +58,9 @@ def rebuild_pipelines_for_project(project: str, manager, api_key: str | None = N
         return
     cfg = ProjectConfig.from_dict(load_project_config(project, manager))
     key = api_key or st.session_state.get("user_openai_key")
+    if not key and st.session_state.get("provider_forget_requested"):
+        st.warning("Connect a provider key to re-enable this session.")
+        return
     try:
         runtime = build_runtime(cfg, api_key=key)
     except RuntimeError as e:
@@ -65,7 +69,11 @@ def rebuild_pipelines_for_project(project: str, manager, api_key: str | None = N
         st.session_state.query_pipeline = None
         st.warning(str(e))
         return
+    previous = st.session_state.get("runtime")
+    if previous:
+        previous.close()
     st.session_state.runtime = runtime
+    st.session_state.provider_identity = hashlib.sha256((key or "").encode()).hexdigest()
     st.session_state.ingest_pipeline = runtime.ingest_pipeline
     st.session_state.query_pipeline = runtime.query_pipeline
     st.session_state.missing_key_notice = not bool(key)
@@ -86,6 +94,8 @@ def ensure_project_pipelines(selected_project: str, manager):
         or (st.session_state.runtime is None)
         or (st.session_state.ingest_pipeline is None)
         or (has_key and st.session_state.query_pipeline is None)
+        or st.session_state.get("provider_identity")
+        != hashlib.sha256((st.session_state.get("user_openai_key") or "").encode()).hexdigest()
     ):
         rebuild_pipelines_for_project(
             selected_project,

@@ -176,6 +176,9 @@ class QueryResponse(BaseModel):
 
 
 class IngestRequest(BaseModel):
+    run_id: str | None = None
+    approval: str | None = None
+    resume: bool = False
     mode: str = "both"
     force_crawl: bool = False
 
@@ -212,8 +215,6 @@ class ChatListResponse(BaseModel):
 
 
 class ErrorResponse(BaseModel):
-    model_config = ConfigDict(
-        json_schema_extra={"example": {"detail": "Project not found: Docs"}}
-    )
+    model_config = ConfigDict(json_schema_extra={"example": {"detail": "Project not found: Docs"}})
 
     detail: str

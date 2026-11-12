@@ -23,5 +23,8 @@ def ingest_project(
         project,
         mode=request.mode,
         force_crawl=request.force_crawl,
+        **({"run_id": request.run_id} if request.run_id else {}),
+        **({"approval": request.approval} if request.approval else {}),
+        **({"resume": True} if request.resume else {}),
     )
-    return IngestResponse(status="completed", result=result)
+    return IngestResponse(status=result.get("status", "completed"), result=result)
