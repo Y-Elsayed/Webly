@@ -23,6 +23,71 @@ def _db(segment_id: str, model: str = "model-a") -> FaissDatabase:
     return db
 
 
+def test_pointer_replacement_retries_windows_reader_conflict(tmp_path, monkeypatch):
+    import os
+
+    store = SnapshotStore(tmp_path / "index")
+    first = store.publish(_db("first"))
+    original_replace = os.replace
+    attempts = []
+
+    def replace(source, destination):
+        if str(destination).endswith("active.json"):
+            attempts.append(source)
+            if len(attempts) < 3:
+                error = PermissionError("reader sharing conflict")
+                error.winerror = 32
+                raise error
+        return original_replace(source, destination)
+
+    monkeypatch.setattr("webly.vector_index.snapshots.os.replace", replace)
+    monkeypatch.setattr("webly.vector_index.snapshots.time.sleep", lambda _: None)
+    second = store.publish(_db("second"), expected_version=first)
+    assert store.active_version() == second
+    assert len(attempts) == 3
+    assert FaissDatabase(str(store.validate(second))).index.ntotal == 1
+
+
+def test_pointer_replacement_permanent_conflict_is_bounded_and_preserves_active(tmp_path, monkeypatch):
+    import os
+
+    store = SnapshotStore(tmp_path / "index")
+    first = store.publish(_db("first"))
+    original_replace = os.replace
+    attempts = []
+
+    def replace(source, destination):
+        if str(destination).endswith("active.json"):
+            attempts.append(source)
+            error = PermissionError("permanent conflict")
+            error.winerror = 32
+            raise error
+        return original_replace(source, destination)
+
+    monkeypatch.setattr("webly.vector_index.snapshots.os.replace", replace)
+    monkeypatch.setattr("webly.vector_index.snapshots.time.sleep", lambda _: None)
+    with pytest.raises(PermissionError, match="permanent conflict"):
+        store.publish(_db("second"), expected_version=first)
+    assert len(attempts) == 10
+    assert store.active_version() == first
+    assert not list(store.root.glob(".active-*"))
+    assert FaissDatabase(str(store.validate(first))).index.ntotal == 1
+
+
+def test_file_sync_failures_are_not_silently_ignored(tmp_path, monkeypatch):
+    store = SnapshotStore(tmp_path / "index")
+    first = store.publish(_db("first"))
+
+    def fail(_descriptor):
+        raise OSError("file sync failed")
+
+    monkeypatch.setattr("webly.vector_index.snapshots.os.fsync", fail)
+    with pytest.raises(OSError, match="file sync failed"):
+        store.publish(_db("second"), expected_version=first)
+    assert store.active_version() == first
+    assert FaissDatabase(str(store.validate(first))).index.ntotal == 1
+
+
 def test_publish_reload_rollback_and_model_compatibility(tmp_path):
     store = SnapshotStore(tmp_path / "index")
     first = _db("first")

@@ -61,9 +61,11 @@ class ProjectRuntime:
         with self._query_lock:
             try:
                 result = self.ingest_pipeline.run(**kwargs)
-                self._loaded_version = None
                 return result
             finally:
+                # A failed build can also replace/mutate the in-memory database.
+                # Reload the still-active snapshot before serving another query.
+                self._loaded_version = None
                 self.cost_tracker.flush()
 
     def query(self, question: str, *, retry_on_empty: bool = False, memory_context: str = "") -> str:

@@ -1,3 +1,5 @@
--r requirements.txt
+-e ./webcreeper
+-e .[api,ui]
+httpx>=0.27,<1
 pytest==8.3.2
 ruff==0.6.9

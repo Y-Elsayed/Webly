@@ -3,30 +3,37 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sys
 from logging import FileHandler, Formatter, StreamHandler, getLogger
-from pathlib import Path
-
-
-def _ensure_local_webcreeper_path() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    webcreeper_root = repo_root / "webcreeper"
-    if not webcreeper_root.exists():
-        return
-    root_str = str(webcreeper_root)
-    if root_str not in sys.path:
-        sys.path.insert(0, root_str)
-
-
-_ensure_local_webcreeper_path()
+from urllib.parse import urlparse
 
 try:
-    from webcreeper.agents.atlas.atlas import Atlas
+    from webcreeper.agents.atlas.atlas import Atlas as _Atlas
 except ImportError as exc:
     raise ImportError(
-        "Webly requires the sibling 'webcreeper' package. Initialize the submodule and ensure "
-        "'webcreeper/' is present, or install the 'webcreeper' package in the environment."
+        "Webly requires the installed 'webcreeper==0.2.0' dependency. "
+        "For development, initialize the submodule and run 'python -m pip install ./webcreeper'."
     ) from exc
+
+
+class Atlas(_Atlas):
+    """Compatibility adapter for WebCreeper 0.2.0's authority normalization.
+
+    Its host-comparison helper also strips www/ports and must not be used to
+    rewrite the actual fetch destination. Keep upstream query/fragment rules,
+    but retain the caller's authority (including IPv6 brackets and userinfo).
+    Remove this override once the pinned dependency preserves authorities.
+    """
+
+    def _normalize_url(self, url: str) -> str:
+        if not url:
+            return url
+        parsed = urlparse(url)
+        # Do not feed an authority to the upstream host-comparison helper: it
+        # can produce an unparsable URL for bracketed IPv6 addresses as well.
+        normalized = super()._normalize_url(parsed._replace(netloc="").geturl())
+        userinfo, separator, authority = parsed.netloc.rpartition("@")
+        netloc = (userinfo + separator if separator else "") + authority.lower()
+        return urlparse(normalized)._replace(netloc=netloc).geturl()
 
 
 class JsonFormatter(logging.Formatter):

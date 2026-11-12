@@ -12,3 +12,8 @@ venv/
 node_modules/
 websites_storage/**
 !websites_storage/.gitkeep
+**/websites_storage/**
+**/build/
+**/*.egg-info/
+issue.md
+*.local.md

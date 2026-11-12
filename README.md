@@ -18,6 +18,15 @@ User guide:
 - API service guide: `docs/API_SERVICE.md`
 - [Current retrieval logic](docs/RETRIEVAL_LOGIC.md): builder and classic flows, ranking, evidence checks, limits, and tracing
 - [Current chunking logic](docs/CHUNKING_LOGIC.md): HTML sections, word windows, embedding segments, metadata, and limitations
+- [Production readiness audit](docs/PRODUCTION_READINESS_AUDIT.md): verified flaws, generalization gaps, and release blockers
+- [Core/platform boundary](docs/CORE_PLATFORM_BOUNDARY.md): engine responsibilities and integration with the separate chatbot SaaS
+- [Core integration and package verification](docs/CORE_INTEGRATION.md): installed dependency setup, public API and isolated checks
+- [Core production roadmap](docs/PRODUCTION_ROADMAP.md): prioritized engine fixes and production-readiness tests
+
+Indexing skips and reports pages with no extractable content and merges identical cleaned pages before embedding.
+The Run tab shows indexed/skipped/duplicate counts; `ingest_report.json` beside the crawl results lists skipped URLs
+and canonical source aliases. Rebuild with **Index only** to apply this to saved crawls. Malformed records, extraction
+exceptions, embedding failures, and publication errors still abort the build, preserving the previous active snapshot.
 
 ## What It Does
 - Crawl websites with policy controls (domains, depth, robots, URL filters)
@@ -43,7 +52,9 @@ User guide:
 Python `3.11.7` is recommended.
 
 ```bash
-pip install .
+git submodule update --init --recursive
+python -m pip install ./webcreeper
+python -m pip install .
 cp .env.example .env
 # set OPENAI_API_KEY in .env
 ```
@@ -53,7 +64,10 @@ Repository bootstrap:
 git submodule update --init --recursive
 ```
 
-If you are running Webly outside this repo layout, install `webcreeper` separately in the environment.
+WebCreeper is a separate installed dependency (`webcreeper==0.2.0`), not bundled
+inside Core. Install it from the pinned submodule when developing; Core does not
+modify `sys.path` to discover sibling source directories. For wheel-based use,
+install both verified wheels as described in [Core integration](docs/CORE_INTEGRATION.md).
 
 Optional extras:
 ```bash

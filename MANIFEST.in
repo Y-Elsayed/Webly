@@ -1,0 +1,10 @@
+prune webly/websites_storage
+prune websites_storage
+prune webly/webcreeper
+prune webcreeper
+prune log
+exclude .env
+exclude .env.*
+exclude issue.md
+exclude *.local.md
+global-exclude __pycache__ *.py[cod] *.log

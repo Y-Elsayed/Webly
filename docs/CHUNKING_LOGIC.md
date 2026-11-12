@@ -17,6 +17,8 @@ SlidingTextChunker: section-local word windows
             |
 Chunk text + heading hierarchy + links + word offsets
             |
+Deduplicate identical cleaned pages; retain source URL aliases
+            |
 Optional summary used as embedding input
             |
 Split embedding input to fit the embedder's budget
@@ -184,6 +186,14 @@ IDs are version-derived, not a complete fingerprint of every processing option. 
 
 ## 6. Embedding-size splitting and original evidence
 
+### Deduplicate cleaned pages first
+
+Before summarization or embedding, normal ingestion fingerprints each page's ordered list of chunk headings and whitespace-normalized text. URLs, IDs, links, and timestamps do not participate. The first matching page in crawl-file order becomes canonical; subsequent identical pages add their URLs to `metadata.source_urls` on every canonical segment rather than generating additional summaries, vectors, or records. Original evidence and canonical IDs are unchanged.
+
+This catches cases such as EUI's `?page=6` and `?page=7`, whose retained chunks are identical even though their full-page crawler hashes differ. Real pagination with different retained text or headings remains distinct. Pages sharing only some chunks are not merged. Deduplication state resets on every transform and is not shared across projects or builds. Alias link graphs are not merged, and citations continue to display canonical URLs.
+
+### Fit embedding input to the model budget
+
 Before embedding, ingestion saves the chunk text as `original_text`. With summarization enabled and a summarizer available, a successful summary becomes the embedding input and is retained as `summary`. A missing or failed summary falls back to the original chunk text.
 
 The shared `chunk_text_for_embedding()` helper then checks input size. It discovers the first positive integer limit among `max_input_tokens`, `max_tokens`, `context_size`, and `max_seq_len`, falling back to 8,192. It multiplies this by the embedder's `safety_ratio`, or the helper's default of 0.9, to obtain its effective ceiling.
@@ -235,7 +245,13 @@ Custom strategies can implement `TextChunker.chunk_html(html, url)` and return s
 
 With ingestion debug mode enabled, `raw_chunks.jsonl` records the page URL, page-level chunk index, raw chunk text, and character length. Summary debugging writes previews separately. The raw-chunk debug file does not contain every structural metadata field; use processed/index metadata when inspecting headings, links, or final segment IDs.
 
-Missing page URL/HTML, no extractable evidence for a page, malformed crawl records, or embedding failures abort normal transformation instead of silently publishing those failures as a complete index. Empty individual chunks are skipped. Publication additionally rejects an empty transformed record list.
+Valid pages with no extractable content are skipped and reported, so an empty login page does not abort otherwise usable ingestion. Missing or incorrectly typed URL/HTML, malformed crawl records, extraction exceptions, and embedding failures remain fatal. If no usable evidence remains, the attempt fails without publishing an empty replacement. Debug streams close on both success and failure.
+
+Indexing returns an additive `ingest_summary` with `pages_total`, `pages_indexed` (canonical page records processed), `pages_skipped`, `duplicate_pages`, `chunks_skipped`, and `segments_indexed`. `ingest_report_path` points to `ingest_report.json` beside the crawl file when that report was written successfully. The JSON report contains timestamps, the summary, skipped URL/line/reason entries, and duplicate-to-canonical mappings. Its status is `transformed` for a direct transformation, `completed` after publication through `run()`, or `failed` when the attempt fails. Counters in a failed report describe attempted work, not a newly active index.
+
+The Run tab displays the summary, skipped-page warning, report path, and actionable failure message. The report is replaced atomically per attempt; raw crawl files are not changed. Rebuild using **Index only** to apply deduplication to an existing project.
+
+Snapshot publication syncs files using writable handles and replaces the active pointer atomically, with bounded retries for Windows sharing conflicts. POSIX directory syncing remains enabled; Windows explicitly skips unsupported directory syncing, giving weaker directory durability across power loss. Other write/sync errors still fail publication. Failed ingestion invalidates the runtime's cached database so the next query reloads the still-active snapshot.
 
 ## 8. Retrieval consequences and current limits
 

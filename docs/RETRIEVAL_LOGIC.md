@@ -41,6 +41,8 @@ A search invocation means one query passed to the shared retriever. That invocat
 
 Search results contain segment IDs, page URLs, text, and optional heading hierarchy and incoming-link metadata. Multiple segments from the same page can remain in the final candidate set.
 
+Normal ingestion merges pages whose complete cleaned chunk lists are identical before embedding, retaining equivalent URLs in `metadata.source_urls`. Query-time sources and citations still use the canonical URL. This does not deduplicate partially overlapping chunks or add source-diversity ranking. See [chunking and ingestion behavior](CHUNKING_LOGIC.md) for details.
+
 Retrieval searches indexed content; it does not browse arbitrary live pages, fetch neighboring sections, or follow URLs during a normal query. An optional `recrawl_fn` callback can be invoked after an empty initial search when `retry_on_empty=True`. A callback must actually be supplied: the standard `build_runtime()` wiring does not provide one.
 
 ## 3. Shared search and ranking

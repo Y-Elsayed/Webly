@@ -5,12 +5,9 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-WEBCREEPER_ROOT = ROOT / "webcreeper"
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-if WEBCREEPER_ROOT.exists() and str(WEBCREEPER_ROOT) not in sys.path:
-    sys.path.insert(0, str(WEBCREEPER_ROOT))
 
 
 @pytest.fixture(autouse=True)

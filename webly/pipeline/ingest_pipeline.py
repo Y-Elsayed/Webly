@@ -1,7 +1,11 @@
 import hashlib
 import json
 import os
+import re
+import tempfile
 from collections import defaultdict
+from contextlib import ExitStack
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from filelock import FileLock
@@ -78,6 +82,63 @@ class IngestPipeline:
 
         # Page processor: HTML -> text chunks
         self.page_processor = SemanticPageProcessor(extractor=DefaultTextExtractor(), chunker=DefaultChunker())
+        self._reset_ingest_report()
+
+    def _reset_ingest_report(self):
+        self._report_written = False
+        self.ingest_summary = {
+            "pages_total": 0, "pages_indexed": 0, "pages_skipped": 0,
+            "duplicate_pages": 0, "chunks_skipped": 0, "segments_indexed": 0,
+        }
+        self.ingest_report = {
+            "status": "running", "started_at": datetime.now(timezone.utc).isoformat(),
+            "summary": self.ingest_summary, "skipped_pages": [], "duplicate_pages": [],
+        }
+        self.ingest_report_path = os.path.join(
+            os.path.dirname(os.path.abspath(self._resolve_results_path())), "ingest_report.json",
+        )
+
+    def _write_ingest_report(self, status: str, error: str | None = None):
+        self.ingest_report.update(status=status, updated_at=datetime.now(timezone.utc).isoformat())
+        if error is not None:
+            self.ingest_report["error"] = error
+        temporary = None
+        try:
+            os.makedirs(os.path.dirname(self.ingest_report_path), exist_ok=True)
+            descriptor, temporary = tempfile.mkstemp(
+                prefix=".ingest-report-", suffix=".json", dir=os.path.dirname(self.ingest_report_path),
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                json.dump(self.ingest_report, stream, ensure_ascii=False, indent=2)
+            os.replace(temporary, self.ingest_report_path)
+            self._report_written = True
+        except OSError:
+            self._report_written = False
+            self.logger.exception("Could not write ingestion report")
+        finally:
+            if temporary and os.path.exists(temporary):
+                try:
+                    os.unlink(temporary)
+                except OSError:
+                    # Diagnostics must not turn successful indexing into a
+                    # failure or hide the extraction/provider error in flight.
+                    self.logger.warning("Could not remove temporary ingestion report", exc_info=True)
+
+    @staticmethod
+    def _content_fingerprint(chunks: List[dict]) -> str:
+        content = [
+            {"hierarchy": chunk.get("hierarchy", []), "text": " ".join(chunk["text"].split())}
+            for chunk in chunks
+        ]
+        payload = json.dumps(content, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _safe_error(self, error: Exception) -> str:
+        message = str(error)
+        key = getattr(self.embedder, "api_key", None)
+        if isinstance(key, str) and key:
+            message = message.replace(key, "[redacted]")
+        return re.sub(r"\bsk-[A-Za-z0-9_-]+", "[redacted]", message)
 
     # -------------------------------------------------------------------------
     # Internal helpers
@@ -185,6 +246,20 @@ class IngestPipeline:
                 self.crawler.crawl()
 
     def transform(self) -> List[dict]:
+        self._reset_ingest_report()
+        try:
+            with ExitStack() as resources:
+                records = self._transform_records(resources)
+            if not records:
+                raise RuntimeError("No usable evidence remains after skipping pages without extractable content")
+        except Exception as exc:
+            self._write_ingest_report("failed", self._safe_error(exc))
+            raise
+        self._write_ingest_report("transformed")
+        self.logger.info("Ingestion summary: %s", self.ingest_summary)
+        return records
+
+    def _transform_records(self, resources: ExitStack) -> List[dict]:
         """
         Read results file -> chunk -> (optional) summarize -> embed.
         """
@@ -192,6 +267,7 @@ class IngestPipeline:
         # Initialize FAISS index
         self.db.create(dim=self.embedder.dim)
         transformed_records: List[dict] = []
+        content_pages: dict[str, List[dict]] = {}
 
         # Resolve results path (require presence & non-empty)
         resolved_results = self._resolve_results_path(require_non_empty=True)
@@ -229,8 +305,12 @@ class IngestPipeline:
                     }
                 )
 
-        summary_debug_file = open(self.debug_summary_path, "w", encoding="utf-8") if self.debug else None
-        chunk_debug_file = open(self.debug_chunks_path, "w", encoding="utf-8") if self.debug else None
+        summary_debug_file = resources.enter_context(
+            open(self.debug_summary_path, "w", encoding="utf-8"),
+        ) if self.debug else None
+        chunk_debug_file = resources.enter_context(
+            open(self.debug_chunks_path, "w", encoding="utf-8"),
+        ) if self.debug else None
 
         # Stream results (compute total for progress if possible)
         total_lines = None
@@ -243,21 +323,20 @@ class IngestPipeline:
 
         with open(resolved_results, "r", encoding="utf-8") as f:
             for idx, line in enumerate(f, start=1):
+                self.ingest_summary["pages_total"] += 1
+                url = None
                 try:
                     record = json.loads(line)
+                    if not isinstance(record, dict):
+                        raise ValueError("Crawl record must be a JSON object")
                     url = record.get("url")
                     html = record.get("html")
 
+                    if not isinstance(url, str) or not url.strip() or not isinstance(html, str) or not html.strip():
+                        raise ValueError("Crawl record is missing a nonempty URL or HTML string")
+
                     outgoing_links = site_graph.get(url, [])
                     incoming_links = incoming_map.get(url, [])
-
-                    if not url or not html:
-                        raise ValueError("Crawl record is missing URL or HTML")
-
-                    chunks = self.page_processor.process(url, html)
-                    if not chunks:
-                        raise ValueError(f"No extractable evidence for {url}")
-                    page_version_id = hashlib.sha256((url + "\0" + html).encode("utf-8")).hexdigest()
 
                     if self.progress_callback:
                         try:
@@ -265,6 +344,39 @@ class IngestPipeline:
                         except Exception as e:
                             self.logger.debug(f"Progress callback error: {e}")
 
+                    chunks = [
+                        chunk for chunk in self.page_processor.process(url, html)
+                        if isinstance(chunk.get("text"), str) and chunk["text"].strip()
+                    ]
+                    if not chunks:
+                        self.ingest_summary["pages_skipped"] += 1
+                        self.ingest_report["skipped_pages"].append({
+                            "url": url, "line": idx, "reason": "no_extractable_content",
+                        })
+                        self.logger.warning("Skipping crawl record on line %s (%s): no extractable content", idx, url)
+                        continue
+
+                    fingerprint = self._content_fingerprint(chunks)
+                    if fingerprint in content_pages:
+                        canonical_records = content_pages[fingerprint]
+                        canonical_url = canonical_records[0]["url"]
+                        for canonical_record in canonical_records:
+                            aliases = canonical_record["metadata"]["source_urls"]
+                            if url not in aliases:
+                                aliases.append(url)
+                        self.ingest_summary["duplicate_pages"] += 1
+                        self.ingest_summary["chunks_skipped"] += len(chunks)
+                        self.ingest_report["duplicate_pages"].append({
+                            "url": url, "canonical_url": canonical_url, "line": idx,
+                            "chunks_skipped": len(chunks),
+                        })
+                        self.logger.info(
+                            "Skipping duplicate page %s -> %s (%s chunks)", url, canonical_url, len(chunks),
+                        )
+                        continue
+
+                    page_version_id = hashlib.sha256((url + "\0" + html).encode("utf-8")).hexdigest()
+                    page_records = []
                     for chunk in chunks:
                         content_to_embed = chunk.get("text", "")
                         if not isinstance(content_to_embed, str) or not content_to_embed.strip():
@@ -313,7 +425,10 @@ class IngestPipeline:
                             try:
                                 embedding = self.embedder.embed(part)
                             except Exception as e:
-                                raise RuntimeError(f"Embedding error for {url} (seg {seg_idx})") from e
+                                raise RuntimeError(
+                                    f"Embedding error for {url} (seg {seg_idx}): "
+                                    f"{type(e).__name__}: {self._safe_error(e)}"
+                                ) from e
                             if embedding is None:
                                 raise RuntimeError(f"Embedding returned no vector for {url} seg {seg_idx}")
 
@@ -339,24 +454,32 @@ class IngestPipeline:
                                     "seg_index": seg_idx,
                                     "seg_count": len(parts),
                                     "page_url": url,
+                                    "source_urls": [url],
                                     "outgoing_links": outgoing_links,
                                     "incoming_links": incoming_links,
                                     "crawled_at": record.get("crawled_at", ""),
                                 },
                             }
                             transformed_records.append(rec)
+                            page_records.append(rec)
+                            self.ingest_summary["segments_indexed"] += 1
+
+                    if page_records:
+                        content_pages[fingerprint] = page_records
+                        self.ingest_summary["pages_indexed"] += 1
 
                 except json.JSONDecodeError as e:
-                    raise RuntimeError(f"Invalid crawl record on line {idx}") from e
+                    raise RuntimeError(f"Invalid crawl record on line {idx}: malformed JSON") from e
                 except Exception as e:
-                    raise RuntimeError(f"Failed to transform crawl record on line {idx}") from e
+                    safe_url = url if isinstance(url, str) else "URL unavailable"
+                    raise RuntimeError(
+                        f"Failed to transform crawl record on line {idx} ({safe_url}): {self._safe_error(e)}"
+                    ) from e
 
         if summary_debug_file:
-            summary_debug_file.close()
             self.logger.info(f"Wrote debug summaries to {self.debug_summary_path}")
 
         if chunk_debug_file:
-            chunk_debug_file.close()
             self.logger.info(f"Wrote raw chunks to {self.debug_chunks_path}")
 
         with open(resolved_results, "rb") as source_stream:
@@ -527,6 +650,7 @@ class IngestPipeline:
                     ),
                 }
             try:
+                self._reset_ingest_report()
                 self._expected_version = SnapshotStore(self.index_path).active_version()
                 records = self.transform()
                 self.load(records)
@@ -535,14 +659,21 @@ class IngestPipeline:
                     if r.get("metadata")
                 })
                 self._write_checkpoint("load_done", {"indexed_url_count": indexed_url_count})
+                if hasattr(self, "published_version"):
+                    self.ingest_report["index_version"] = self.published_version
+                self._write_ingest_report("completed")
             except Exception as e:
-                self._write_checkpoint("transform_or_load_failed", {"error": str(e)})
+                message = self._safe_error(e)
+                self._write_ingest_report("failed", message)
+                self._write_checkpoint("transform_or_load_failed", {"error": message})
                 raise
             self.logger.info("Indexing phase complete.")
             return {
                 "crawled": (mode == "both"),
                 "indexed": True,
                 "index_path": self.index_path,
+                "ingest_summary": dict(self.ingest_summary),
+                "ingest_report_path": self.ingest_report_path if self._report_written else None,
             }
 
     # -------------------------------------------------------------------------

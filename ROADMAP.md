@@ -1,5 +1,12 @@
 # Roadmap
 
+For the 2026-11-12 assessment and prioritized commercial release work, use the
+[production readiness audit](docs/PRODUCTION_READINESS_AUDIT.md) and
+[Core production roadmap](docs/PRODUCTION_ROADMAP.md), following the
+[Core/platform boundary](docs/CORE_PLATFORM_BOUNDARY.md). Auth, tenancy, dashboards
+and billing belong to the separate chatbot platform. The component backlog below
+contains historical status labels and is not a production readiness checklist.
+
 This roadmap is organized by Webly components and split into:
 - `Done`: implemented in the current codebase
 - `Next`: high-priority follow-ups

@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -44,6 +45,11 @@ class SnapshotStore:
 
     @staticmethod
     def _sync_directory(path: Path) -> None:
+        # Python's directory descriptors/fsync are not supported on Windows.
+        # Files are still synced before atomic replacement; directory durability
+        # across power loss has a weaker guarantee than on POSIX.
+        if os.name == "nt":
+            return
         descriptor = os.open(path, os.O_RDONLY)
         try:
             os.fsync(descriptor)
@@ -110,7 +116,7 @@ class SnapshotStore:
                     stream.flush()
                     os.fsync(stream.fileno())
                 for name in files:
-                    with (staging / name).open("rb") as stream:
+                    with (staging / name).open("r+b") as stream:
                         os.fsync(stream.fileno())
                 self._sync_directory(staging)
                 final = self.version_path(version)
@@ -137,7 +143,16 @@ class SnapshotStore:
                 json.dump({"version": version}, stream)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temporary, self.root / "active.json")
+            for attempt in range(10):
+                try:
+                    os.replace(temporary, self.root / "active.json")
+                    break
+                except PermissionError as exc:
+                    # Windows readers may briefly deny replacement of an open
+                    # destination. Keep replacement atomic and retries bounded.
+                    if getattr(exc, "winerror", None) not in {5, 32} or attempt == 9:
+                        raise
+                    time.sleep(0.01 * (attempt + 1))
             self._sync_directory(self.root)
         finally:
             if os.path.exists(temporary):

@@ -57,6 +57,23 @@ def render_run_tab(current_project: str, cfg: dict, manager):
             try:
                 result = runtime.run_ingest(force_crawl=force_crawl, mode=mode_val)
 
+                summary = result.get("ingest_summary") or {}
+                if summary:
+                    st.caption(
+                        f"Pages processed: {summary['pages_total']} · "
+                        f"Indexed: {summary['pages_indexed']} · "
+                        f"Skipped: {summary['pages_skipped']} · "
+                        f"Duplicates merged: {summary['duplicate_pages']} · "
+                        f"Segments indexed: {summary['segments_indexed']}"
+                    )
+                    if summary["pages_skipped"]:
+                        st.warning(
+                            f"Skipped {summary['pages_skipped']} pages with no extractable content. "
+                            "The remaining pages were indexed. Review the ingestion report for skipped URLs."
+                        )
+                    if result.get("ingest_report_path"):
+                        st.caption(f"Ingestion report: {result['ingest_report_path']}")
+
                 if isinstance(result, dict) and result.get("empty_results"):
                     st.warning(
                         "No pages were saved. Possible causes: start URL not within allowed domains, "
@@ -76,6 +93,10 @@ def render_run_tab(current_project: str, cfg: dict, manager):
                             st.success("Crawl complete. Results file ready.")
                         else:
                             st.warning("Crawl finished, but results file is missing or empty.")
+            except Exception as exc:
+                st.error(str(exc))
+                if getattr(runtime.ingest_pipeline, "_report_written", False):
+                    st.caption(f"Ingestion report: {runtime.ingest_pipeline.ingest_report_path}")
             finally:
                 st.session_state.show_run_panel = False
                 progress.empty()

@@ -24,6 +24,7 @@ classifiers = [
 
 # Core deps — enough to run pipelines headlessly (no UI, no HuggingFace models)
 dependencies = [
+    "webcreeper==0.2.0",
     "openai>=1.84.0",
     "python-dotenv>=1.0.1",
     "requests>=2.31.0",
@@ -88,7 +89,8 @@ Changelog = "https://github.com/Y-Elsayed/webly/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["."]
-exclude = ["tests*", "docs*", ".claude*", "webcreeper*"]
+include = ["webly", "webly.*"]
+exclude = ["webly.webcreeper*", "webly.websites_storage*"]
 
 [tool.setuptools.package-data]
 "webly.chatbot" = ["prompts/*.txt"]
