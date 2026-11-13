@@ -4,6 +4,9 @@
 > documented in [the implementation report](CORE_V2_IMPLEMENTATION.md). The gaps
 > below describe the pushed pre-hardening commit; the old probe command now runs
 > executable regression tests rather than recreating those obsolete defects.
+>
+> Use [the 2026-11-13 SaaS entry review](SAAS_ENTRY_READINESS_REVIEW.md) for the
+> current decision, confirmed remaining gaps, CI evidence and platform architecture.
 
 Assessment: 2026-11-12, against pushed commit `2b7e890de153595aaf4779c3360c0cc12c70626f`. This is a current-state assessment after the packaging/ingestion work, not a repetition of the earlier pre-fix audit. New probes and this document are local analysis artifacts; no production implementation changes are included in this assessment.
 

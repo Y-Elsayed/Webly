@@ -22,7 +22,8 @@ User guide:
 - [Core/platform boundary](docs/CORE_PLATFORM_BOUNDARY.md): engine responsibilities and integration with the separate chatbot SaaS
 - [Core integration and package verification](docs/CORE_INTEGRATION.md): installed dependency setup, public API and isolated checks
 - [Core production roadmap](docs/PRODUCTION_ROADMAP.md): prioritized engine fixes and production-readiness tests
-- [Current Core readiness and SaaS entry gates](docs/CORE_READINESS_STATUS.md): verified capabilities, reproduced gaps and the remaining release work
+- [Current readiness and SaaS entry review](docs/SAAS_ENTRY_READINESS_REVIEW.md): verified capabilities, remaining operational gaps and the platform integration sequence
+- [Core readiness implementation checklist](docs/CORE_SAAS_READINESS_PLAN.md): capture policy, deployment checks and external release gates
 - [Core 0.2 implementation and release gates](docs/CORE_V2_IMPLEMENTATION.md): implemented hardening, measured evidence and remaining external validation
 
 Indexing skips and reports pages with no extractable content and merges identical cleaned pages before embedding.

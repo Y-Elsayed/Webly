@@ -3,6 +3,8 @@
 Core is the website ingestion and grounded retrieval engine. The separate SaaS
 owns authentication, tenant authorization, billing, dashboards and job scheduling.
 The Streamlit and FastAPI applications in this repository are reference adapters.
+See [the current readiness review](SAAS_ENTRY_READINESS_REVIEW.md) for confirmed
+remaining gaps and the proposed SaaS integration and launch sequence.
 
 ## Install and provenance
 
@@ -111,6 +113,15 @@ to inspect a run. The snapshot builder validates frozen inputs again before
 publication. Exact cleaned-page duplicates share canonical evidence and aliases;
 this is not near-duplicate or global chunk dedup.
 
+New format 2 run manifests seal a separate capture-policy digest and source
+inventory. Changes to start URL, domains/subdomains, paths, URL patterns, seeds,
+crawl coverage/depth or robots policy require fresh capture and raise
+`run_policy_mismatch`. Query/model/rate changes can reuse compatible format 2
+HTML. Format 1 runs require the exact original full configuration digest and
+currently allowed source URLs. Inspect the derived `compatibility` field without
+rewriting old manifests. Published query traces identify the snapshot's capture
+policy digest; changing configuration alone does not revoke an active snapshot.
+
 When a refresh removes any URLs, ingestion returns `status="approval_required"`
 with an added/changed/removed proposal and `approval_token`. Review the exact
 candidate, then resubmit `index_only` with its `run_id`, that token and a new
@@ -167,8 +178,9 @@ Old snapshots require a rebuild.
 
 The current extraction contract is `blocks-v2`. Snapshots built with `blocks-v1`
 also need rebuilding using a new operation ID. Completed frozen runs remain
-usable as raw HTML input; no recrawl or mutation of their original manifest is
-needed. Old cache identities, operation results and removal approvals are not
+usable as raw HTML input when capture compatibility permits it; their original
+manifests are not rewritten. Format 1 policy mismatches require fresh capture.
+Old cache identities, operation results and removal approvals are not
 reused across extraction revisions. See the
 [HTML extraction plan](HTML_EXTRACTION_IMPROVEMENT_PLAN.md) for the exact changes.
 

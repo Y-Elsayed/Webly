@@ -5,6 +5,9 @@ single Linux host deployment. Core owns capture, transformation, retrieval and
 atomic index publication. The SaaS owns authentication, tenant authorization,
 durable scheduling, quotas, provider credentials and billing.
 
+For the post-push assessment, newly confirmed operational gaps and the concrete
+platform entry architecture, see [the SaaS entry review](SAAS_ENTRY_READINESS_REVIEW.md).
+
 ## Implemented in the current working tree
 
 | Work | Result and verification |
@@ -62,11 +65,13 @@ policy digest in sanitized diagnostics.
   no answer-quality gate has passed and no paid evaluation has run. Offline
   validation correctly rejects 52 repeated draft questions pending rewriting.
 
-Evidence currently describes an uncommitted working tree. The release candidate
-must identify exact parent and crawler revisions, wheel hashes, container digest,
-Python/platform and dependency inventories. Previous commit CI does not validate
-these changes. Commit the crawler changes first, update the parent submodule
-reference, then run the new full CI for that exact candidate.
+The local evidence above was captured from the development working tree and
+retains that provenance. The implementation has since been pushed as Core
+`ddc94ce`, with crawler `2594a7b`; all nine jobs in
+[its CI run](https://github.com/Y-Elsayed/Webly/actions/runs/43434855824) passed.
+Release artifacts must still identify exact parent/crawler revisions, wheel
+hashes, container digest, Python/platform and dependency inventories. A green
+implementation CI does not establish live-model quality or deployment readiness.
 
 ## Remaining release gates, in order
 

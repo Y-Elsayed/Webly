@@ -1,0 +1,8 @@
+{
+  "real_model_calls": false,
+  "non_object_pointer_error": "AttributeError",
+  "non_object_run_error": "AttributeError",
+  "committed_with_pending_usage": true,
+  "recovered": true,
+  "events_delivered_by_recovery": 0
+}
