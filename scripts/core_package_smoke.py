@@ -41,8 +41,15 @@ class FixtureSite(BaseHTTPRequestHandler):
     def do_GET(self):
         self.seen.append(self.path)
         bodies = {
-            "/": f'<h1>Observatory</h1><p>{FACT}</p><a href="/visits">Visitor reservations</a>',
-            "/visits": f"<h1>Reservations</h1><p>{DETAIL}</p>",
+            "/": (
+                f'<h1>Observatory</h1><nav><a href="/visits">Visitor reservations</a></nav>'
+                f"<footer><p>{FACT}</p></footer>"
+            ),
+            "/visits": (
+                f"<h1>Reservations</h1><form><p>{DETAIL}</p><label>Reservation type</label>"
+                '<select><option>Standard visit</option></select><input value="SECRET_INPUT"></form>'
+                "<table><tr><td>Engineering</td><td>50000</td></tr></table>"
+            ),
         }
         body = bodies.get(self.path)
         self.send_response(200 if body else 404)
@@ -146,6 +153,7 @@ def main():
                 ingest = runtime.run_ingest(mode="both")
                 assert ingest["indexed"], ingest
                 assert ingest["ingest_summary"]["pages_indexed"] == 2, ingest
+                assert providers.chat.calls == 0, "HTML extraction must not add model calls"
                 assert {"/", "/visits"}.issubset(FixtureSite.seen), FixtureSite.seen
                 records = [
                     json.loads(line)
@@ -161,6 +169,12 @@ def main():
                 metadata = reopened.db.metadata
                 assert {item["url"] for item in metadata} == expected_urls
                 assert all(item["page_version_id"] and item["segment_id"] for item in metadata)
+                blocks = [b for item in metadata for b in item["metadata"]["blocks"]]
+                assert any(b["region"] == "footer" and FACT in b["text"] for b in blocks)
+                assert any(b["region"] == "form" and DETAIL in b["text"] for b in blocks)
+                assert any(b["kind"] == "table" and "Engineering | 50000" in b["text"] for b in blocks)
+                assert "SECRET_INPUT" not in json.dumps(metadata)
+                assert reopened.db.embedding_space["embedding_text_version"] == "blocks-v2"
                 result = reopened.query_result("When does the observatory open?")
                 assert isinstance(result, webly.QueryResult)
                 assert result.supported and result.answer == FACT, result.to_dict()

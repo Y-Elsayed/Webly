@@ -23,6 +23,7 @@ from webly.contracts import (
     atomic_json,
     digest_json,
 )
+from webly.processors.extraction_version import EXTRACTION_VERSION
 from webly.vector_index.snapshots import SnapshotStore
 
 
@@ -75,7 +76,7 @@ class CrawlRuns:
             "config_digest": digest_json(config),
             "sources": sources,
             "coverage": {"captured": len(sources), "excluded": excluded or {}, "failed": 0},
-            "extractor_version": "blocks-v1",
+            "extractor_version": EXTRACTION_VERSION,
         }
         atomic_json(root / "run.json", manifest)
         return manifest
@@ -162,7 +163,14 @@ class IngestOperations:
         runtime, pipe = self.runtime, self.runtime.ingest_pipeline
         config = runtime.config.to_dict()
         fingerprint = digest_json(
-            {"config": config, "mode": mode, "run_id": run_id, "approval": approval, "limits": asdict(context.limits)}
+            {
+                "config": config,
+                "mode": mode,
+                "run_id": run_id,
+                "approval": approval,
+                "limits": asdict(context.limits),
+                "extraction_version": EXTRACTION_VERSION,
+            }
         )
         if path.exists():
             previous = json.loads(path.read_text(encoding="utf-8"))
@@ -266,7 +274,12 @@ class IngestOperations:
                             url for url in set(sources) & set(previous_sources) if sources[url] != previous_sources[url]
                         ),
                         "candidate_digest": digest_json(
-                            {"source": manifest, "config": config, "embedding_space": pipe.db.embedding_space}
+                            {
+                                "source": manifest,
+                                "config": config,
+                                "embedding_space": pipe.db.embedding_space,
+                                "extraction_version": EXTRACTION_VERSION,
+                            }
                         ),
                     }
                     proposal["approval_token"] = digest_json(proposal)
@@ -277,6 +290,7 @@ class IngestOperations:
                         "sources": sources,
                         "resource_id": self.resources.resource_id,
                         "candidate_digest": proposal["candidate_digest"],
+                        "extraction_version": EXTRACTION_VERSION,
                     }
 
                 pipe.publication_guard = guard

@@ -28,6 +28,7 @@ from webly.crawl.crawler import Crawler
 from webly.observability.cost_tracker import CostTracker
 from webly.pipeline.ingest_pipeline import IngestPipeline
 from webly.pipeline.query_pipeline import QueryPipeline
+from webly.processors.extraction_version import EXTRACTION_VERSION
 from webly.project_config import ProjectConfig
 from webly.providers import AccountedProvider, ProviderBundle
 from webly.query_result import QueryResult
@@ -290,7 +291,7 @@ def build_runtime(
         "provider_model": project_config.embedding_model,
         "dimensions": embedder.dim,
         "distance": "normalized_inner_product",
-        "embedding_text_version": "blocks-v1",
+        "embedding_text_version": EXTRACTION_VERSION,
         "provider_endpoint": providers.embedding.endpoint_id,
         "model_revision": providers.embedding.revision,
     }

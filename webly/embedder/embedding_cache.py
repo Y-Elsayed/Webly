@@ -16,6 +16,8 @@ import sqlite3
 import threading
 from datetime import datetime, timezone
 
+from webly.processors.extraction_version import EXTRACTION_VERSION
+
 
 class EmbeddingCache:
     """Thread-safe SQLite cache for embedding vectors."""
@@ -46,7 +48,7 @@ class EmbeddingCache:
         provider="default",
         revision="1",
         dimensions=None,
-        preprocessing_version="blocks-v1",
+        preprocessing_version=EXTRACTION_VERSION,
         namespace="default",
     ) -> str:
         """Deterministic cache key for a (text, model) pair."""

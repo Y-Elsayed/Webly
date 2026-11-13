@@ -649,6 +649,101 @@ def test_pointer_read_retries_only_transient_windows_sharing_errors(tmp_path, mo
         store.active_version()
 
 
+def test_windows_pointer_sharing_error_can_have_only_posix_errno(tmp_path, monkeypatch):
+    import errno
+    import os
+
+    if os.name != "nt":
+        pytest.skip("The errno-only sharing violation is specific to Windows")
+    store = SnapshotStore(tmp_path)
+    (tmp_path / "active.json").write_text('{"version": "valid-version"}', encoding="utf-8")
+    original = Path.read_text
+    attempts = []
+
+    def sharing_violation(path, *args, **kwargs):
+        attempts.append(path)
+        if len(attempts) == 1:
+            raise PermissionError(errno.EACCES, "Permission denied", str(path))
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", sharing_violation)
+    assert store.active_version() == "valid-version" and len(attempts) == 2
+
+
 def test_explicit_zero_port_is_not_reinterpreted_as_default_port():
     with pytest.raises(FetchError):
         FetchPolicy().validate_url("https://1.1.1.1:0/")
+
+
+@pytest.mark.parametrize("mode", ["builder", "classic"])
+@pytest.mark.parametrize(
+    "html,fact",
+    [
+        ("<footer><p>Call the visitor desk at 12345.</p></footer>", "Call the visitor desk at 12345."),
+        ("<table><tr><td>Engineering</td><td>50000</td></tr></table>", "Engineering | 50000"),
+        (
+            "<footer><p>يفتح المكتب يوم الثلاثاء الساعة التاسعة.</p></footer>",
+            "يفتح المكتب يوم الثلاثاء الساعة التاسعة.",
+        ),
+    ],
+)
+def test_new_regions_and_headerless_tables_are_indexed_retrieved_and_cited(tmp_path, html, fact, mode):
+    runtime = make_runtime(tmp_path / "core", fact=fact, mode=mode)
+    try:
+        run_id = import_pages(runtime, tmp_path, [("https://different.test/info", html)])
+        result = runtime.run_ingest(mode="index_only", run_id=run_id)
+        assert result["indexed"]
+        answer = runtime.query_result("Contact information or fees?")
+        assert answer.supported and any(fact in c["supporting_span"] for c in answer.citations)
+        assert runtime.db.embedding_space["embedding_text_version"] == "blocks-v2"
+        records = runtime.db.metadata
+        assert any(record["metadata"]["blocks"] for record in records)
+    finally:
+        runtime.close()
+
+
+def test_revision_change_invalidates_replay_and_approval_but_reuses_frozen_html(tmp_path, monkeypatch):
+    from webly.crawl import runs
+
+    runtime = make_runtime(tmp_path / "core")
+    try:
+        first = import_pages(runtime, tmp_path, [page(), page("https://example.test/removed")])
+        runtime.run_ingest(mode="index_only", run_id=first)
+        candidate = import_pages(runtime, tmp_path, [page()])
+        context = OperationContext(operation_id="old-transform", limits=OperationLimits.ingest())
+        pending = runtime.run_ingest(mode="index_only", run_id=candidate, context=context)
+        assert pending["status"] == "approval_required"
+        original_manifest = runtime.inspect_run(candidate)
+        monkeypatch.setattr(runs, "EXTRACTION_VERSION", "future-test-revision")
+        with pytest.raises(PublicationConflict):
+            runtime.run_ingest(
+                mode="index_only",
+                run_id=candidate,
+                context=OperationContext(operation_id="old-transform", limits=OperationLimits.ingest()),
+            )
+        stale = runtime.run_ingest(mode="index_only", run_id=candidate, approval=pending["proposal"]["approval_token"])
+        assert stale["status"] == "approval_required"
+        assert stale["proposal"]["approval_token"] != pending["proposal"]["approval_token"]
+        accepted = runtime.run_ingest(mode="index_only", run_id=candidate, approval=stale["proposal"]["approval_token"])
+        assert accepted["indexed"] and runtime.inspect_run(candidate) == original_manifest
+    finally:
+        runtime.close()
+
+
+def test_old_extraction_snapshot_and_cache_identity_require_rebuild(tmp_path):
+    runtime = make_runtime(tmp_path / "core")
+    try:
+        run_id = import_pages(runtime, tmp_path, [page()])
+        space = runtime.db.embedding_space.copy()
+        runtime.db.embedding_space["embedding_text_version"] = "blocks-v1"
+        runtime.run_ingest(mode="index_only", run_id=run_id)
+        runtime.db.embedding_space = space
+        with pytest.raises(ArtifactError):
+            runtime.query_result("Opening times?")
+        runtime.run_ingest(mode="index_only", run_id=run_id)
+        assert runtime.query_result("Opening times?").supported
+        assert EmbeddingCache.make_key("fact", "model", preprocessing_version="blocks-v1") != EmbeddingCache.make_key(
+            "fact", "model", preprocessing_version="blocks-v2"
+        )
+    finally:
+        runtime.close()

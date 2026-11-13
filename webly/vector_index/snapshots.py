@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -68,7 +69,10 @@ class SnapshotStore:
                 data = json.loads(pointer.read_text(encoding="utf-8"))
                 break
             except PermissionError as exc:
-                if getattr(exc, "winerror", None) not in {5, 32} or attempt == 9:
+                sharing_error = getattr(exc, "winerror", None) in {5, 32} or (
+                    os.name == "nt" and exc.errno == errno.EACCES
+                )
+                if not sharing_error or attempt == 9:
                     raise
                 context = current_operation()
                 if context:

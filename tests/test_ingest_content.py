@@ -48,7 +48,7 @@ def test_empty_login_page_skipped_and_reported_while_valid_evidence_publishes(tm
 
 def test_identical_cleaned_pages_dedup_before_summary_and_embed_and_keep_aliases(tmp_path):
     first, second = "https://example.test/?page=6", "https://example.test/?page=7"
-    pipe = make_pipe(tmp_path, [page(first, HTML + "<footer>Old footer</footer>"), page(second, HTML)])
+    pipe = make_pipe(tmp_path, [page(first, HTML + "<script>Ignored script</script>"), page(second, HTML)])
     summaries, embeddings = [], []
 
     def summarize(url, text):
@@ -92,6 +92,7 @@ def test_every_embedding_segment_has_distinct_alias_list_without_repeated_urls(t
     "<h1>Admissions</h1><p>Annual tuition is six thousand dollars.</p>",
     "<h1>Different heading</h1><p>Annual tuition is five thousand dollars.</p>",
     HTML + "<h2>Deadline</h2><p>Applications must arrive before June first.</p>",
+    HTML + "<footer>Contact the visitor desk at 12345.</footer>",
 ])
 def test_genuine_pagination_and_partial_overlap_keep_unique_evidence(tmp_path, other):
     pipe = make_pipe(tmp_path, [page(), page("https://example.test/?page=7", other)])
