@@ -9,6 +9,16 @@ Webly uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### HTML evidence preservation
+
+- Preserve published navigation/footer/form text with region metadata, while
+  excluding control values, textareas, buttons and comments from indexed evidence.
+- Interpret headerless and structured tables from their source cells, including
+  row/column headers, groups, merged cells and nested tables. Fall back to ordered
+  text for malformed or excessive structures; bound metadata/evidence expansion.
+- Advance extraction identity to `blocks-v2`. Rebuild earlier snapshots from saved
+  HTML under new operation IDs; old raw run manifests remain unchanged.
+
 ### Core 0.2 hardening (unreleased)
 
 - Breaking factory contract: explicit resource scope and caller-owned provider

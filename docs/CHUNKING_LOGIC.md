@@ -8,8 +8,11 @@ choosing builder or classic does not change ingestion boundaries.
 `SemanticPageProcessor` passes original HTML to `SlidingTextChunker` (also named
 `DefaultChunker`). The separate text extractor is invoked for compatibility but
 its transformed text is not the chunker's input. BeautifulSoup parses the HTML
-and removes `script`, `style`, `noscript`, `form`, `nav` and `footer`. Headers and
-asides are retained because useful evidence can appear there. This is tag-based
+and removes `script`, `style`, `noscript`, input controls, textareas, buttons and
+HTML comments. Navigation, footers and forms retain published text, including
+form instructions, legends, labels and option labels. Input values, hidden values,
+textarea contents and button text stay excluded even from the body fallback.
+Headers and asides are retained because useful evidence can appear there. This is tag-based
 cleanup, not a learned main-content detector or JavaScript renderer.
 
 Heading tags `h1` through `h6` maintain a breadcrumb path. Each encountered heading
@@ -24,10 +27,19 @@ retained. There is no minimum word-count filter: `Deadline: June 1`, a name or a
 single value survives even when longer paragraphs are present. If no structural
 content exists, the cleaned body's plain text is a final fallback.
 
-Ordinary text normalizes whitespace through BeautifulSoup. Tables become a simple
-Markdown representation with their first row as the header. Each data row is
-expanded with a repeated header and separator before packing, so later rows retain
-column meaning. Complex merged/nested table layout is not fully reconstructed.
+Ordinary text normalizes whitespace through BeautifulSoup. Tables are interpreted
+from cells before rendering; the first ordinary data row is never promoted to a
+header. Explicit `headers` associations take precedence, including an explicitly
+empty association. Otherwise `scope`, row/column groups and span geometry determine
+relationships. Leading all-`th` rows and a leading `th` in a mixed data row supply
+conservative inferred relationships, marked in metadata. Headerless rows retain
+all values with neutral row positions. Captions, empty cells, merged cells and
+nested tables survive; nested text is extracted once.
+
+Each table is bounded to 100,000 occupied grid positions, 1,000 columns, 100,000
+header associations and 10,485,760 accounted expanded evidence/provenance characters. Malformed or
+excessive structure falls back to its own ordered text, marked uncertain, rather
+than guessing column meanings. No LLM is used for table interpretation.
 Code uses original line breaks inside triple-backtick fences. Oversized code
 slices retain fencing; syntax-aware parsing is not performed.
 
@@ -38,7 +50,11 @@ until the next block would exceed the target. Block boundaries and blank lines
 are retained. A single oversized block is sliced by whitespace-token positions
 with a 300-word step, preserving 50-word overlap. Overlap applies within an
 oversized block; whole neighboring blocks are not copied into the next chunk.
-Added table headers/code fences can make rendered text exceed the target slightly;
+Oversized table rows reserve part of the word budget for continuation context,
+capped at 512 characters and one third of the word target. Full values survive in
+the evidence slices; continuation descriptors retain intersecting cell coordinates
+and header references without repeating full source rows. Added code fences can
+make rendered text exceed the target slightly;
 the later embedding tokenizer split enforces the actual provider ceiling.
 
 `max_words` must be positive and `overlap` nonnegative. An overlap at least as large
@@ -62,6 +78,13 @@ Each structural chunk carries its URL, heading `hierarchy`, text, deterministic
 chunker ID, outgoing anchors, `tokens` (a historical name for whitespace word
 count), and section-local `start_word` / `end_word` positions. The normal ingest
 pipeline assigns URL-based chunk IDs and final segment IDs independently.
+
+Every extracted block has a `region`: `main`, `navigation`, `footer`, `form` or
+`unknown`, derived from its nearest semantic ancestor or explicit ARIA landmark.
+This metadata does not exclude regions or apply ranking penalties. Table blocks
+also carry `table_id`, `row_index`, cell coordinates/spans/header associations and
+`structure_status`. Split-row descriptors use `cell_text_basis="source_table"`;
+their full values remain in evidence slices and the frozen source HTML.
 
 `blocks` contains rendered text, `kind`, deterministic `block_id`, anchors,
 `start_char`, `end_char`, word positions and
@@ -125,7 +148,10 @@ content; enable them only under the host's access/retention policy.
 
 Core indexes an explicitly completed immutable run, checks its hashes again
 before publishing and requests exact-candidate approval for removed source URLs.
-Snapshots publish through a checked atomic active pointer. Errors expose
+Snapshots publish through a checked atomic active pointer. Extraction identity is
+now `blocks-v2`: caches, snapshots, operation replay and removal approvals use this
+revision. Rebuild older snapshots with a new operation ID from validated saved HTML;
+old crawl-run manifests remain unchanged and recrawling is unnecessary. Errors expose
 `not_committed`, `committed` or `uncertain` outcomes; do not infer failure solely
 from whether an exception was raised. See [integration and migration](CORE_INTEGRATION.md).
 
@@ -134,7 +160,8 @@ from whether an exception was raised. See [integration and migration](CORE_INTEG
 This remains HTML heading/block packing with word targets. It does not infer
 semantic topics, render JavaScript, read PDFs/images, reconstruct every table,
 automatically remove repeated site chrome or guarantee every fact survives any
-website layout. Removed navigation/footer/form text can contain useful facts.
+website layout. Hidden or interactive control contents are deliberately excluded;
+there is no automatic cross-page boilerplate removal or region-based ranking yet.
 Overlapping or partially duplicate chunks can remain in an index. Summary-based
 embeddings can emphasize different information from original evidence.
 
@@ -144,6 +171,7 @@ answer quality require the real bilingual corpus described in the
 [implementation report](CORE_V2_IMPLEMENTATION.md).
 
 Sources: [chunker](../webly/processors/text_chunkers.py),
+[table interpretation](../webly/processors/table_extraction.py),
 [page processor](../webly/processors/page_processor.py),
 [ingest pipeline](../webly/pipeline/ingest_pipeline.py),
 [embedding splitter](../webly/pipeline/embedding_text.py),

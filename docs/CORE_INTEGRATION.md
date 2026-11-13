@@ -143,7 +143,11 @@ authenticated content are outside the supported ingestion contract.
 ## Evidence and query behavior
 
 Chunks retain headings and typed paragraph/list/table/code blocks, including short
-facts. Tables repeat headers across row splits; code preserves line breaks.
+facts. Navigation, footers and forms retain published text and region metadata;
+entered/hidden values, textareas and buttons are excluded. Tables use explicit or
+conservatively inferred header relationships, preserve headerless data rows and
+repeat only associated context across splits. Malformed/excessive table structure
+falls back to ordered text with uncertain metadata. Code preserves line breaks.
 Offsets refer to the extracted section representation, not byte positions in the
 original HTML. Embedding segments obey the provider tokenizer and preserve the
 original evidence separately from optional summaries.
@@ -159,7 +163,16 @@ marked `unverified_transformation`. Debug-off traces omit questions and source t
 
 Core 0.2 intentionally changes the factory signature and snapshot format. Reference
 apps use a separate `core-v2` root, leaving existing project data untouched.
-Old snapshots require a rebuild. Import trusted saved JSON/JSONL explicitly:
+Old snapshots require a rebuild.
+
+The current extraction contract is `blocks-v2`. Snapshots built with `blocks-v1`
+also need rebuilding using a new operation ID. Completed frozen runs remain
+usable as raw HTML input; no recrawl or mutation of their original manifest is
+needed. Old cache identities, operation results and removal approvals are not
+reused across extraction revisions. See the
+[HTML extraction plan](HTML_EXTRACTION_IMPROVEMENT_PLAN.md) for the exact changes.
+
+Import trusted saved JSON/JSONL explicitly:
 
 ```python
 run_id = runtime.import_legacy("old/results.jsonl", acknowledge_complete=True)
