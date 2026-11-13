@@ -578,7 +578,10 @@ class IngestPipeline:
         mode: str = "both",
     ):
         os.makedirs(self.index_path, exist_ok=True)
-        with FileLock(os.path.join(self.index_path, ".ingest.lock")):
+        context = current_operation()
+        with FileLock(
+            os.path.join(self.index_path, ".ingest.lock"), timeout=max(0.001, context.remaining) if context else 30
+        ):
             return self._run_unlocked(
                 override_callback=override_callback,
                 settings_override=settings_override,

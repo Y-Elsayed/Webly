@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from tests.test_integration import IntegrationDummyEmbedder, _make_ingest_pipeline
+from webly.contracts import ArtifactError
 from webly.runtime import ProjectRuntime
 from webly.vector_index.faiss_db import FaissDatabase
 from webly.vector_index.snapshots import SnapshotStore
@@ -232,7 +233,7 @@ def test_failed_runtime_build_forces_reload_of_previous_snapshot(tmp_path):
     old = runtime._loaded_version
     pipe.crawler._pages = [page(html="<form><input></form>")]
     pipe.crawler.crawl()
-    with pytest.raises(RuntimeError, match="No usable evidence"):
+    with pytest.raises(ArtifactError):
         runtime.run_ingest(mode="index_only")
     assert runtime._loaded_version is None
     assert runtime.ensure_index_loaded()

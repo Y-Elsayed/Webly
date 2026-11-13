@@ -125,7 +125,7 @@ def test_explicit_runtime_resources_secrets_lifecycle_and_unknown_fields(tmp_pat
     assert runtime.providers.embedder.closed == 1
     with pytest.raises(ConfigurationError):
         runtime.query_result("question")
-    with pytest.raises(ValueError, match="Unknown"):
+    with pytest.raises(ConfigurationError):
         build_runtime(
             {"start_url": "https://example.test/", "typo": True},
             resources=ResourceScope("other", tmp_path / "other"),
@@ -690,7 +690,7 @@ def test_explicit_zero_port_is_not_reinterpreted_as_default_port():
 def test_new_regions_and_headerless_tables_are_indexed_retrieved_and_cited(tmp_path, html, fact, mode):
     runtime = make_runtime(tmp_path / "core", fact=fact, mode=mode)
     try:
-        run_id = import_pages(runtime, tmp_path, [("https://different.test/info", html)])
+        run_id = import_pages(runtime, tmp_path, [("https://example.test/info", html)])
         result = runtime.run_ingest(mode="index_only", run_id=run_id)
         assert result["indexed"]
         answer = runtime.query_result("Contact information or fees?")

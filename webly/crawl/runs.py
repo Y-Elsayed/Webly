@@ -23,6 +23,7 @@ from webly.contracts import (
     atomic_json,
     digest_json,
 )
+from webly.crawl.policy import capture_policy, compatibility, require_compatible
 from webly.processors.extraction_version import EXTRACTION_VERSION
 from webly.vector_index.snapshots import SnapshotStore
 
@@ -30,6 +31,23 @@ from webly.vector_index.snapshots import SnapshotStore
 def file_digest(path):
     with Path(path).open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def source_inventory(path):
+    sources = {}
+    with Path(path).open(encoding="utf-8") as stream:
+        for line in stream:
+            try:
+                record = json.loads(line)
+                url, html = record["url"], record["html"]
+                if not isinstance(url, str) or not url or not isinstance(html, str) or url in sources:
+                    raise ValueError()
+                sources[url] = hashlib.sha256(html.encode()).hexdigest()
+            except (ValueError, KeyError, TypeError):
+                raise ArtifactError("Crawl run contains malformed or repeated page records") from None
+    if not sources:
+        raise ArtifactError("Crawl run has no captured pages")
+    return sources
 
 
 class CrawlRuns:
@@ -46,30 +64,18 @@ class CrawlRuns:
         atomic_json(root / "run.json", {"format": 1, "run_id": run_id, "status": "running"})
         return run_id
 
-    def seal(self, run_id, *, config, excluded=None):
+    def seal(self, run_id, *, config, excluded=None, origin="crawl"):
         root = self.directory(run_id)
         source = root / "results.jsonl"
         if not source.is_file() or (root / ".crawl_incomplete").exists():
             raise ArtifactError("Crawl run is missing or incomplete")
-        sources = {}
-        for line in source.read_text(encoding="utf-8").splitlines():
-            try:
-                record = json.loads(line)
-                url, html = record["url"], record["html"]
-                if not isinstance(url, str) or not url or not isinstance(html, str):
-                    raise ValueError()
-            except (ValueError, KeyError, TypeError):
-                raise ArtifactError("Crawl run contains malformed page records") from None
-            if url in sources:
-                raise ArtifactError("Crawl run contains repeated source URLs")
-            sources[url] = hashlib.sha256(html.encode()).hexdigest()
-        if not sources:
-            raise ArtifactError("Crawl run has no captured pages")
+        sources = source_inventory(source)
         checksums = {
             name: file_digest(root / name) for name in ("results.jsonl", "graph.json") if (root / name).is_file()
         }
+        policy = capture_policy(config)
         manifest = {
-            "format": 1,
+            "format": 2,
             "run_id": run_id,
             "status": "completed",
             "checksums": checksums,
@@ -77,7 +83,11 @@ class CrawlRuns:
             "sources": sources,
             "coverage": {"captured": len(sources), "excluded": excluded or {}, "failed": 0},
             "extractor_version": EXTRACTION_VERSION,
+            "crawl_policy": policy,
+            "crawl_policy_digest": digest_json(policy),
+            "origin": origin,
         }
+        require_compatible(manifest, config)
         atomic_json(root / "run.json", manifest)
         return manifest
 
@@ -98,6 +108,8 @@ class CrawlRuns:
             path = self.resources.path("runs", run_id, name)
             if not path.is_file() or file_digest(path) != expected:
                 raise ArtifactError("Frozen crawl run changed")
+        if manifest.get("sources") != source_inventory(root / "results.jsonl"):
+            raise ArtifactError("Run source inventory does not match the frozen records")
         return manifest
 
     def import_legacy(self, path, *, acknowledge_complete, config):
@@ -117,16 +129,20 @@ class CrawlRuns:
                     stream.write(json.dumps(record, ensure_ascii=False) + "\n")
         else:
             shutil.copyfile(source, target)
-        self.seal(run_id, config=config)
+        self.seal(run_id, config=config, origin="trusted_import")
         return run_id
 
-    def inspect(self, run_id):
+    def inspect(self, run_id, *, config=None):
         path = self.directory(run_id) / "run.json"
         try:
             manifest = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             raise ArtifactError("Run manifest is missing or corrupt") from None
-        return self.validate(run_id) if manifest.get("status") == "completed" else manifest
+        if manifest.get("status") == "completed":
+            manifest = self.validate(run_id)
+            if config is not None:
+                manifest = {**manifest, "compatibility": compatibility(manifest, config)}
+        return manifest
 
 
 class IngestOperations:
@@ -170,6 +186,7 @@ class IngestOperations:
                 "approval": approval,
                 "limits": asdict(context.limits),
                 "extraction_version": EXTRACTION_VERSION,
+                "crawl_policy_digest": digest_json(capture_policy(config)),
             }
         )
         if path.exists():
@@ -248,6 +265,7 @@ class IngestOperations:
             if not run_id:
                 raise ConfigurationError("index_only requires an explicit completed run_id")
             manifest = self.runs.validate(run_id)
+            policy_check = require_compatible(manifest, config)
             if mode == "crawl_only":
                 result = IngestResult(crawled=True, indexed=False, run_id=run_id, status="completed")
             else:
@@ -255,7 +273,7 @@ class IngestOperations:
                 pipe.crawler.output_dir = str(self.runs.directory(run_id))
 
                 def guard(records, store):
-                    self.runs.validate(run_id)
+                    require_compatible(self.runs.validate(run_id), config)
                     active = store.active_version()
                     old = {}
                     if active:
@@ -279,6 +297,7 @@ class IngestOperations:
                                 "config": config,
                                 "embedding_space": pipe.db.embedding_space,
                                 "extraction_version": EXTRACTION_VERSION,
+                                "crawl_policy_digest": policy_check["crawl_policy_digest"],
                             }
                         ),
                     }
@@ -291,6 +310,7 @@ class IngestOperations:
                         "resource_id": self.resources.resource_id,
                         "candidate_digest": proposal["candidate_digest"],
                         "extraction_version": EXTRACTION_VERSION,
+                        "crawl_policy_digest": policy_check["crawl_policy_digest"],
                     }
 
                 pipe.publication_guard = guard

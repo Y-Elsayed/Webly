@@ -3,6 +3,9 @@ from pathlib import Path
 
 import streamlit as st
 
+from webly.contracts import CoreError
+from webly.crawl.policy import compatibility
+from webly.project_config import ProjectConfig
 from webly.ui.helpers import _index_dir_ready
 from webly.ui.project import rebuild_pipelines_for_project
 
@@ -50,8 +53,12 @@ def render_run_tab(current_project: str, cfg: dict, manager):
             try:
                 data = json.loads(manifest.read_text(encoding="utf-8"))
                 if data.get("status") == "completed":
-                    completed.append(data["run_id"])
-            except (ValueError, OSError, KeyError):
+                    info = compatibility(data, ProjectConfig.from_dict(cfg).to_dict())
+                    if info["compatible"]:
+                        completed.append(data["run_id"])
+                    else:
+                        st.caption(f"Run {data['run_id']} requires a fresh crawl under the current source policy.")
+            except (CoreError, ValueError, OSError, KeyError):
                 continue
         selected_run = st.selectbox("Completed crawl run", completed) if completed else None
         if not completed:

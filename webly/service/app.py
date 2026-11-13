@@ -26,7 +26,7 @@ def create_app(*, storage_root: str | None = None) -> FastAPI:
 
     @app.exception_handler(CoreError)
     def handle_core_error(_request: Request, exc: CoreError):
-        status = 409 if exc.code in {"publication_conflict", "publication_uncertain"} else 400
+        status = 409 if exc.code in {"publication_conflict", "publication_uncertain", "run_policy_mismatch"} else 400
         return JSONResponse(
             status_code=status,
             content={
@@ -35,6 +35,7 @@ def create_app(*, storage_root: str | None = None) -> FastAPI:
                 "retryable": exc.retryable,
                 "operation_id": exc.operation_id,
                 "outcome": asdict(exc.outcome),
+                **({"changed_fields": exc.changed_fields} if hasattr(exc, "changed_fields") else {}),
             },
         )
 

@@ -10,13 +10,17 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
+from filelock import Timeout
+
 from webly._webcreeper import configure_logging
+from webly.boundary import core_boundary
 from webly.chatbot.prompts.system_prompts import apply_mode_flags, get_system_prompt
 from webly.chatbot.webly_chat_agent import WeblyChatAgent
 from webly.contracts import (
     ArtifactError,
     BudgetExceeded,
     ConfigurationError,
+    CoreError,
     IngestResult,
     OperationContext,
     OperationLimits,
@@ -65,6 +69,7 @@ class ProjectRuntime:
             if self.query_pipeline:
                 self.query_pipeline._query_state.set({})
 
+    @core_boundary()
     def import_legacy(self, path, *, acknowledge_complete=False):
         self._check_open()
         from webly.crawl.runs import CrawlRuns
@@ -75,12 +80,14 @@ class ProjectRuntime:
             path, acknowledge_complete=acknowledge_complete, config=self.config.to_dict()
         )
 
+    @core_boundary()
     def inspect_run(self, run_id):
         from webly.crawl.runs import CrawlRuns
 
         self._check_open()
-        return CrawlRuns(self.resources).inspect(run_id)
+        return CrawlRuns(self.resources).inspect(run_id, config=self.config.to_dict())
 
+    @core_boundary()
     def export_snapshot(self, destination):
         self._check_open()
         with self._query_lock:
@@ -99,6 +106,7 @@ class ProjectRuntime:
             atomic_json(target / "resource.json", {"format": 1, "resource_id": self.resources.resource_id})
             return version
 
+    @core_boundary()
     def restore_snapshot(self, source, *, context=None):
         self._check_open()
         source = Path(source)
@@ -115,6 +123,8 @@ class ProjectRuntime:
         db = backup.validate(version, embedding_space=self.db.embedding_space, load_db=True)
         root = backup.version_path(version)
         manifest = json.loads((root / "manifest.json").read_text())
+        if "results.jsonl" not in manifest.get("checksums", {}):
+            raise ArtifactError("Backup is missing the frozen source records")
         context = context or OperationContext(limits=OperationLimits.ingest())
         with self._query_lock, operation_scope(context):
             published = target.publish(
@@ -155,7 +165,27 @@ class ProjectRuntime:
         try:
             self._check_open()
             with operation_scope(context):
-                yield
+                try:
+                    yield
+                except CoreError as exc:
+                    if exc.operation_id is None:
+                        exc.operation_id = context.operation_id
+                    if exc.outcome.operation_id is None:
+                        exc.outcome = context.outcome
+                    raise
+                except Timeout:
+                    context.check()
+                    from webly.contracts import PublicationConflict
+
+                    raise PublicationConflict(
+                        "Resource operation is busy", operation_id=context.operation_id, outcome=context.outcome
+                    ) from None
+                except (OSError, ValueError, RuntimeError) as exc:
+                    raise ArtifactError(
+                        f"Core operation failed ({type(exc).__name__})",
+                        operation_id=context.operation_id,
+                        outcome=context.outcome,
+                    ) from None
         finally:
             self._query_lock.release()
 
@@ -163,15 +193,17 @@ class ProjectRuntime:
     def db(self):
         return self.ingest_pipeline.db
 
+    @core_boundary()
     def index_exists(self) -> bool:
         return SnapshotStore(self.config.index_dir).active_version() is not None
 
+    @core_boundary()
     def ensure_index_loaded(self) -> bool:
         store = SnapshotStore(self.config.index_dir)
         version = store.active_version()
         if version is None:
             if os.path.exists(os.path.join(self.config.index_dir, "embeddings.index")):
-                raise RuntimeError("Legacy index cannot be used; rebuild from saved crawl results")
+                raise ArtifactError("Legacy index cannot be used; rebuild from saved crawl results")
             return False
         if self._loaded_version == version:
             return True
@@ -184,6 +216,7 @@ class ProjectRuntime:
         self._loaded_version = version
         return True
 
+    @core_boundary()
     def run_ingest(self, *, context: OperationContext | None = None, **kwargs):
         self._check_open()
         context = context or OperationContext(limits=OperationLimits.ingest())
@@ -215,6 +248,7 @@ class ProjectRuntime:
             memory_context=memory_context,
         ).answer
 
+    @core_boundary()
     def query_result(
         self,
         question: str,
@@ -225,7 +259,7 @@ class ProjectRuntime:
     ) -> QueryResult:
         self._check_open()
         if self.query_pipeline is None:
-            raise RuntimeError("Query pipeline is unavailable for this runtime.")
+            raise ConfigurationError("Query pipeline is unavailable for this runtime.")
         context = context or OperationContext()
         with self._operation_lock(context):
             try:
@@ -247,11 +281,22 @@ class ProjectRuntime:
                     memory_context=memory_context,
                 )
                 result.trace["index_version"] = self._loaded_version
+                manifest = (
+                    json.loads(
+                        (
+                            SnapshotStore(self.config.index_dir).version_path(self._loaded_version) / "manifest.json"
+                        ).read_text(encoding="utf-8")
+                    )
+                    if self.resources
+                    else {}
+                )
+                result.trace["crawl_policy_digest"] = manifest.get("publication", {}).get("crawl_policy_digest")
                 result.trace["operation_id"] = context.operation_id
                 result.trace["usage"] = context.summary()
                 if self.resources and not self.config.query_debug:
                     safe = {
                         "index_version",
+                        "crawl_policy_digest",
                         "operation_id",
                         "usage",
                         "mode",
@@ -267,6 +312,7 @@ class ProjectRuntime:
                 self._flush_tracker(context)
 
 
+@core_boundary(configuration=True)
 def build_runtime(
     config: Mapping[str, Any] | ProjectConfig, *, resources: ResourceScope, providers: ProviderBundle, fetch_policy=None
 ) -> ProjectRuntime:

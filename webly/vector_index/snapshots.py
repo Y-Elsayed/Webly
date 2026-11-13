@@ -15,7 +15,13 @@ from pathlib import Path
 
 from filelock import FileLock, Timeout
 
-from webly.contracts import OperationOutcome, PublicationConflict, PublicationUncertain, current_operation
+from webly.contracts import (
+    ConfigurationError,
+    OperationOutcome,
+    PublicationConflict,
+    PublicationUncertain,
+    current_operation,
+)
 from webly.vector_index.faiss_db import FaissDatabase
 
 
@@ -115,7 +121,7 @@ class SnapshotStore:
         if manifest.get("format") != 2 or manifest.get("version") != version:
             raise RuntimeError("Incompatible snapshot manifest")
         if embedding_space is not None and manifest.get("embedding_space") != embedding_space:
-            raise RuntimeError("Embedding space mismatch; rebuild required")
+            raise ConfigurationError("Embedding space mismatch; rebuild required")
         checksums = manifest.get("checksums")
         if not isinstance(checksums, dict) or not {"embeddings.index", "metadata.json"} <= set(checksums):
             raise RuntimeError("Snapshot manifest is incomplete")

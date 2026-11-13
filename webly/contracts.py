@@ -50,6 +50,14 @@ class PolicyError(CoreError):
     code = "policy_rejected"
 
 
+class RunPolicyMismatch(PolicyError):
+    code = "run_policy_mismatch"
+
+    def __init__(self, changed_fields):
+        super().__init__("Saved capture is incompatible with the current source policy; run a fresh crawl")
+        self.changed_fields = sorted(set(changed_fields))
+
+
 class BudgetExceeded(CoreError):
     code = "budget_exhausted"
 
