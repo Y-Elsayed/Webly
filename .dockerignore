@@ -10,6 +10,9 @@ venv/
 .git/
 .github/
 node_modules/
+evaluation_artifacts/
+package-verification/
+CORE_READINESS_AUDIT.md
 websites_storage/**
 !websites_storage/.gitkeep
 **/websites_storage/**

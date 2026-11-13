@@ -1,0 +1,26 @@
+{
+  "platform": "Linux-5.15.153.1-microsoft-standard-WSL2-x86_64-with-glibc2.41",
+  "python": "3.12.16",
+  "fixture_providers": true,
+  "real_model_calls": false,
+  "production_certified": false,
+  "cancellation": "passed",
+  "reader_writer_contention": [
+    {
+      "writer": 1,
+      "state": "committed",
+      "version": "18af4e94274443db8d341f7c9b828ecb"
+    },
+    {
+      "writer": 0,
+      "state": "publication_conflict"
+    },
+    {
+      "reader_queries": 1383
+    }
+  ],
+  "export_restore": "passed",
+  "process_death_reconciliation": "passed",
+  "disk_full": "real_enospc_previous_snapshot_valid",
+  "elapsed_s": 1.528
+}

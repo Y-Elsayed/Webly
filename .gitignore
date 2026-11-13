@@ -175,6 +175,7 @@ cython_debug/
 .pypirc
 
 # personal files
+evaluation_artifacts/
 .env
 .claude/
 log/

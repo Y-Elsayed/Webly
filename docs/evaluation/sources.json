@@ -1,0 +1,9 @@
+{
+  "sources": [
+    {"site_id": "python", "url": "https://docs.python.org/3/tutorial/datastructures.html", "license_review": "PSF documentation terms; review before redistribution"},
+    {"site_id": "mdn", "url": "https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/table", "license_review": "MDN documentation attribution/share-alike terms; review before redistribution"},
+    {"site_id": "django", "url": "https://www.djangoproject.com/start/overview/", "license_review": "Django documentation terms; review before redistribution"},
+    {"site_id": "un_ar", "url": "https://www.un.org/ar/about-us/universal-declaration-of-human-rights", "license_review": "UN website terms; review before redistribution"},
+    {"site_id": "eui", "url": "https://eui.edu.eg/", "license_review": "Institution website; permission/terms review required before redistribution"}
+  ]
+}

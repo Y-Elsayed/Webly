@@ -5,6 +5,41 @@ on:
   pull_request:
 
 jobs:
+  single-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build installed Core check image
+        run: docker build --target checks -t webly-checks:ci .
+      - name: Prepare writable evidence directory
+        run: mkdir -p host-evidence && chmod 777 host-evidence
+      - name: Check process recovery, contention and actual disk exhaustion
+        run: >-
+          docker run --rm --network none --read-only
+          --tmpfs /tmp:mode=1777 --tmpfs /app/log:mode=1777
+          --tmpfs /limited:size=1m,mode=1777 -e OMP_NUM_THREADS=1
+          -v "$PWD/host-evidence:/evidence" webly-checks:ci
+          python -m scripts.single_host_checks --small-fs /limited --output /evidence/process-checks.json
+      - name: Test installed Core contracts
+        run: >-
+          docker run --rm --network none --read-only
+          --tmpfs /tmp:mode=1777 --tmpfs /app/log:mode=1777 -e OMP_NUM_THREADS=1
+          webly-checks:ci python -m pytest tests -q -p no:cacheprovider
+      - name: Benchmark smoke without model calls
+        run: >-
+          docker run --rm --network none --read-only
+          --tmpfs /tmp:mode=1777 --tmpfs /app/log:mode=1777 -e OMP_NUM_THREADS=1
+          -v "$PWD/host-evidence:/evidence" webly-checks:ci
+          python -m scripts.benchmark_core --pages 100 --segments-per-page 10
+          --dimensions 1536 --queries 10 --output /evidence/benchmark-smoke.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: single-host-evidence
+          path: host-evidence/*.json
+
   test:
     runs-on: ${{ matrix.os }}
     strategy:

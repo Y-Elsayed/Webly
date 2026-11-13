@@ -3,6 +3,7 @@ from decimal import Decimal
 import pytest
 
 from scripts.evaluate_core import SpendGuard, compare_reviews, review_metrics, validate_corpus
+from webly.contracts import digest_json
 
 
 def test_budget_reserves_before_work_and_does_not_refund_unknown_calls():
@@ -31,7 +32,7 @@ def test_synthetic_or_unreviewed_questions_cannot_pass_real_quality_gate():
             "site_id": str(i % 5),
             "language": "ar" if i % 2 else "en",
             "split": "held_out" if i < 40 else "development",
-            "question": "Question?",
+            "question": f"Question {i}?",
             "answerable": i >= 20,
             "reviewed": False,
         }
@@ -71,3 +72,62 @@ def test_reviews_reject_impossible_counts_and_unmatched_source():
     cases = [{"id": "one", "source_hash": "changed", "answerable": True}]
     with pytest.raises(ValueError):
         compare_reviews(cases, [item])
+
+
+def test_review_binds_exact_corpus_run_source_and_response():
+    cases = [
+        {
+            "id": "one",
+            "source_hash": "hash",
+            "answerable": True,
+            "site_id": "site",
+            "language": "en",
+            "split": "held_out",
+            "question": "Fact?",
+        }
+    ]
+    output = {"answer": "Fact"}
+    report = {
+        "run_id": "run",
+        "executed": True,
+        "corpus_hash": digest_json(cases),
+        "results": [{"case_id": "one", "mode": "builder", "source_hash": "hash", "result": output}],
+    }
+    review = {
+        "case_id": "one",
+        "mode": "builder",
+        "run_id": "run",
+        "response_hash": digest_json(output),
+        "source_hash": "hash",
+        "reviewer": "person",
+        "total_claims": 1,
+        "supported_claims": 1,
+        "total_citations": 1,
+        "correct_citations": 1,
+        "answerable": True,
+        "answered": True,
+        "correct_abstention": False,
+    }
+    assert compare_reviews(cases, [review], results=report)["quality_gate"] == "not_passed"
+    for key in ("run_id", "response_hash", "source_hash"):
+        with pytest.raises(ValueError):
+            compare_reviews(cases, [{**review, key: "changed"}], results=report)
+    with pytest.raises(ValueError, match="corpus changed"):
+        compare_reviews([{**cases[0], "question": "Another question?"}], [review], results=report)
+
+
+def test_draft_questions_never_count_as_reviewed_evidence():
+    case = {
+        "id": "draft",
+        "site_id": "site",
+        "language": "ar",
+        "split": "held_out",
+        "question": "Draft?",
+        "answerable": True,
+        "reviewed": True,
+        "reviewer": "person",
+        "source_hash": "hash",
+        "supporting_spans": ["fact"],
+        "draft_question": True,
+    }
+    assert not validate_corpus([case])["reviewed_real_corpus"]
